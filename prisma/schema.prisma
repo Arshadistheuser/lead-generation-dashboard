@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── Auth ────────────────────────────────────────
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("VIEWER")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ─── Team Members ────────────────────────────────
+model TeamMember {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  hubspotOwnerId String?  @unique
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  dailyEntries     DailyEntry[]
+  toolUsages       ToolUsage[]
+  hubspotSnapshots HubSpotSnapshot[]
+}
+
+// ─── Daily Tracker ───────────────────────────────
+model DailyEntry {
+  id           String   @id @default(cuid())
+  date         DateTime
+  teamMemberId String
+  teamMember   TeamMember @relation(fields: [teamMemberId], references: [id])
+
+  accountsResearched Int @default(0)
+  accountsAdded      Int @default(0)
+  contactsAdded      Int @default(0)
+  contactPhoneYes    Int @default(0)
+  contactPhoneNo     Int @default(0)
+  meetingsSet        Int @default(0)
+
+  source    String?
+  industry  String?
+  techStack String?
+  notes     String?
+  onLeave   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date, teamMemberId])
+  @@index([date])
+  @@index([teamMemberId])
+}
+
+// ─── HubSpot Snapshots ──────────────────────────
+model HubSpotSnapshot {
+  id           String   @id @default(cuid())
+  date         DateTime
+  teamMemberId String?
+  teamMember   TeamMember? @relation(fields: [teamMemberId], references: [id])
+
+  totalContacts     Int @default(0)
+  newContactsToday  Int @default(0)
+  totalCompanies    Int @default(0)
+  newCompaniesToday Int @default(0)
+  totalDeals        Int @default(0)
+  newDealsToday     Int @default(0)
+
+  industryBreakdown String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([date, teamMemberId])
+  @@index([date])
+}
+
+// ─── Tool Tracker ────────────────────────────────
+model ToolUsage {
+  id           String   @id @default(cuid())
+  date         DateTime
+  teamMemberId String
+  teamMember   TeamMember @relation(fields: [teamMemberId], references: [id])
+
+  tool            String
+  accountsScraped Int @default(0)
+  accountsWorked  Int @default(0)
+  contactsAdded   Int @default(0)
+
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@unique([date, teamMemberId, tool])
+  @@index([date])
+}
