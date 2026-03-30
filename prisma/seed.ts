@@ -1,11 +1,23 @@
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
-import path from "path";
 import bcrypt from "bcryptjs";
 
-const dbPath = path.resolve(process.cwd(), "dev.db");
-const adapter = new PrismaBetterSqlite3({ url: `file:${dbPath}` });
-const prisma = new PrismaClient({ adapter });
+function createClient() {
+  const url = process.env.DATABASE_URL;
+  if (url && url.startsWith("postgres")) {
+    return new PrismaClient({ datasourceUrl: url });
+  }
+  // Local SQLite
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require("path");
+  const dbPath = path.resolve(process.cwd(), "dev.db");
+  const adapter = new PrismaBetterSqlite3({ url: `file:${dbPath}` });
+  return new PrismaClient({ adapter });
+}
+
+const prisma = createClient();
 
 const TEAM_MEMBERS = [
   "Harika",
