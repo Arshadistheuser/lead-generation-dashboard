@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,17 +10,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const workbook = XLSX.read(buffer);
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(arrayBuffer);
 
     // Find the "Daily Tracker" sheet
-    const sheetName =
-      workbook.SheetNames.find((n) =>
-        n.toLowerCase().includes("daily")
-      ) ?? workbook.SheetNames[0];
+    let sheet = workbook.worksheets.find((ws) =>
+      ws.name.toLowerCase().includes("daily")
+    );
+    if (!sheet) sheet = workbook.worksheets[0];
+    if (!sheet) {
+      return NextResponse.json({ error: "No worksheets found" }, { status: 400 });
+    }
 
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
+    // Extract headers from first row
+    const headers: string[] = [];
+    sheet.getRow(1).eachCell((cell, colNumber) => {
+      headers[colNumber] = String(cell.value ?? "").trim();
+    });
 
     // Get team members for name matching
     const members = await prisma.teamMember.findMany();
@@ -32,12 +39,40 @@ export async function POST(request: NextRequest) {
     let skipped = 0;
     const errors: string[] = [];
 
-    for (const row of rows) {
-      // Try to find team member name
+    // Iterate data rows (skip header)
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // skip header
+
+      const rowData: Record<string, unknown> = {};
+      row.eachCell((cell, colNumber) => {
+        const header = headers[colNumber];
+        if (header) rowData[header] = cell.value;
+      });
+
+      // Queue row for processing
+      processRow(rowData, memberMap, errors).then((result) => {
+        if (result === "imported") imported++;
+        else skipped++;
+      });
+    });
+
+    // Process all rows sequentially
+    const rowsData: Record<string, unknown>[] = [];
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const rowData: Record<string, unknown> = {};
+      row.eachCell((cell, colNumber) => {
+        const header = headers[colNumber];
+        if (header) rowData[header] = cell.value;
+      });
+      rowsData.push(rowData);
+    });
+
+    for (const rowData of rowsData) {
       const nameField =
-        (row["Lead Gen Name"] as string) ??
-        (row["Name"] as string) ??
-        (row["Team Member"] as string);
+        (rowData["Lead Gen Name"] as string) ??
+        (rowData["Name"] as string) ??
+        (rowData["Team Member"] as string);
 
       if (!nameField) {
         skipped++;
@@ -51,14 +86,14 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Parse date
-      const rawDate = row["Date"] as string | number;
+      const rawDate = rowData["Date"];
       let date: Date;
-      if (typeof rawDate === "number") {
-        // Excel serial date
+      if (rawDate instanceof Date) {
+        date = rawDate;
+      } else if (typeof rawDate === "number") {
         date = new Date((rawDate - 25569) * 86400000);
       } else if (rawDate) {
-        date = new Date(rawDate);
+        date = new Date(String(rawDate));
       } else {
         skipped++;
         continue;
@@ -78,28 +113,28 @@ export async function POST(request: NextRequest) {
             date_teamMemberId: { date, teamMemberId: memberId },
           },
           update: {
-            accountsResearched: Number(row["Accounts Researched"] ?? row["Accounts researched"] ?? 0),
-            accountsAdded: Number(row["Accounts Added"] ?? row["New Accounts Added"] ?? 0),
-            contactsAdded: Number(row["Contacts Added"] ?? row["Contacts added"] ?? 0),
-            contactPhoneYes: Number(row["Contact Number Yes"] ?? row["Phone Yes"] ?? 0),
-            contactPhoneNo: Number(row["Contact Number No"] ?? row["Phone No"] ?? 0),
-            meetingsSet: Number(row["Meetings Set"] ?? row["Meetings"] ?? 0),
-            source: (row["Source"] as string) ?? (row["Data Source"] as string) ?? null,
-            industry: (row["Industry"] as string) ?? null,
-            techStack: (row["Tech Stack"] as string) ?? null,
+            accountsResearched: Number(rowData["Accounts Researched"] ?? rowData["Accounts researched"] ?? 0),
+            accountsAdded: Number(rowData["Accounts Added"] ?? rowData["New Accounts Added"] ?? 0),
+            contactsAdded: Number(rowData["Contacts Added"] ?? rowData["Contacts added"] ?? 0),
+            contactPhoneYes: Number(rowData["Contact Number Yes"] ?? rowData["Phone Yes"] ?? 0),
+            contactPhoneNo: Number(rowData["Contact Number No"] ?? rowData["Phone No"] ?? 0),
+            meetingsSet: Number(rowData["Meetings Set"] ?? rowData["Meetings"] ?? 0),
+            source: rowData["Source"] ? String(rowData["Source"]) : rowData["Data Source"] ? String(rowData["Data Source"]) : null,
+            industry: rowData["Industry"] ? String(rowData["Industry"]) : null,
+            techStack: rowData["Tech Stack"] ? String(rowData["Tech Stack"]) : null,
           },
           create: {
             date,
             teamMemberId: memberId,
-            accountsResearched: Number(row["Accounts Researched"] ?? row["Accounts researched"] ?? 0),
-            accountsAdded: Number(row["Accounts Added"] ?? row["New Accounts Added"] ?? 0),
-            contactsAdded: Number(row["Contacts Added"] ?? row["Contacts added"] ?? 0),
-            contactPhoneYes: Number(row["Contact Number Yes"] ?? row["Phone Yes"] ?? 0),
-            contactPhoneNo: Number(row["Contact Number No"] ?? row["Phone No"] ?? 0),
-            meetingsSet: Number(row["Meetings Set"] ?? row["Meetings"] ?? 0),
-            source: (row["Source"] as string) ?? (row["Data Source"] as string) ?? null,
-            industry: (row["Industry"] as string) ?? null,
-            techStack: (row["Tech Stack"] as string) ?? null,
+            accountsResearched: Number(rowData["Accounts Researched"] ?? rowData["Accounts researched"] ?? 0),
+            accountsAdded: Number(rowData["Accounts Added"] ?? rowData["New Accounts Added"] ?? 0),
+            contactsAdded: Number(rowData["Contacts Added"] ?? rowData["Contacts added"] ?? 0),
+            contactPhoneYes: Number(rowData["Contact Number Yes"] ?? rowData["Phone Yes"] ?? 0),
+            contactPhoneNo: Number(rowData["Contact Number No"] ?? rowData["Phone No"] ?? 0),
+            meetingsSet: Number(rowData["Meetings Set"] ?? rowData["Meetings"] ?? 0),
+            source: rowData["Source"] ? String(rowData["Source"]) : rowData["Data Source"] ? String(rowData["Data Source"]) : null,
+            industry: rowData["Industry"] ? String(rowData["Industry"]) : null,
+            techStack: rowData["Tech Stack"] ? String(rowData["Tech Stack"]) : null,
           },
         });
         imported++;
@@ -122,4 +157,12 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+async function processRow(
+  _rowData: Record<string, unknown>,
+  _memberMap: Map<string, string>,
+  _errors: string[]
+): Promise<"imported" | "skipped"> {
+  return "skipped";
 }

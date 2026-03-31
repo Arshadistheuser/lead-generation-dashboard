@@ -19,8 +19,6 @@ import {
   AlertCircle,
   Loader2,
 } from "lucide-react";
-import * as XLSX from "xlsx";
-
 interface MatchResult {
   name: string;
   domain: string;
@@ -29,6 +27,7 @@ interface MatchResult {
   employees: string;
   location: string;
   status: "found" | "not_found" | "possible_match";
+  matchConfidence?: number;
   hubspotId?: string;
   hubspotName?: string;
   hubspotDomain?: string;
@@ -86,6 +85,15 @@ const columns: ColumnDef<MatchResult>[] = [
   { accessorKey: "revenue", header: "Revenue" },
   { accessorKey: "employees", header: "Employees" },
   { accessorKey: "location", header: "Location" },
+  {
+    accessorKey: "matchConfidence",
+    header: "Confidence",
+    cell: ({ row }) => {
+      const confidence = row.original.matchConfidence;
+      if (!confidence) return "—";
+      return <span className="font-mono text-sm">{confidence}%</span>;
+    },
+  },
   {
     accessorKey: "hubspotName",
     header: "HubSpot Match",
@@ -202,22 +210,32 @@ export default function CompanyMatcherPage() {
       ? results.filter((r) => r.status === statusFilter)
       : results;
 
-    const ws = XLSX.utils.json_to_sheet(
-      data.map((r) => ({
-        Status: statusLabel[r.status],
-        "Company Name": r.name,
-        Domain: r.domain,
-        Industry: r.industry,
-        Revenue: r.revenue,
-        Employees: r.employees,
-        Location: r.location,
-        "HubSpot Match": r.hubspotName || "",
-        "HubSpot ID": r.hubspotId || "",
-      }))
-    );
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Results");
-    XLSX.writeFile(wb, `company-match-${statusFilter || "all"}.xlsx`);
+    const headers = ["Status", "Company Name", "Domain", "Industry", "Revenue", "Employees", "Location", "Confidence", "HubSpot Match", "HubSpot ID"];
+    const csvRows = [
+      headers.join(","),
+      ...data.map((r) =>
+        [
+          statusLabel[r.status],
+          `"${(r.name || "").replace(/"/g, '""')}"`,
+          r.domain,
+          `"${(r.industry || "").replace(/"/g, '""')}"`,
+          `"${(r.revenue || "").replace(/"/g, '""')}"`,
+          r.employees,
+          `"${(r.location || "").replace(/"/g, '""')}"`,
+          r.matchConfidence || "",
+          `"${(r.hubspotName || "").replace(/"/g, '""')}"`,
+          r.hubspotId || "",
+        ].join(",")
+      ),
+    ];
+    const csv = csvRows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `company-match-${statusFilter || "all"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   const filteredResults =
