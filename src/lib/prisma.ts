@@ -3,15 +3,17 @@ import { PrismaClient } from "@prisma/client";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
 function createPrismaClient() {
-  // In production (Render), use standard Postgres via DATABASE_URL
-  // Locally, use SQLite via better-sqlite3 adapter
-  if (process.env.NODE_ENV === "production" || process.env.DATABASE_URL?.startsWith("postgres")) {
-    return new PrismaClient({
-      datasourceUrl: process.env.DATABASE_URL,
-    });
+  const url = process.env.DATABASE_URL;
+
+  // Production: Postgres via pg adapter
+  if (url && url.startsWith("postgres")) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { PrismaPg } = require("@prisma/adapter-pg");
+    const adapter = new PrismaPg({ connectionString: url });
+    return new PrismaClient({ adapter });
   }
 
-  // Local development with SQLite
+  // Local development: SQLite via better-sqlite3 adapter
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
   // eslint-disable-next-line @typescript-eslint/no-require-imports

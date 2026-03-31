@@ -5,7 +5,10 @@ import bcrypt from "bcryptjs";
 function createClient() {
   const url = process.env.DATABASE_URL;
   if (url && url.startsWith("postgres")) {
-    return new PrismaClient({ datasourceUrl: url });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { PrismaPg } = require("@prisma/adapter-pg");
+    const adapter = new PrismaPg({ connectionString: url });
+    return new PrismaClient({ adapter });
   }
   // Local SQLite
   // eslint-disable-next-line @typescript-eslint/no-require-imports

@@ -12,6 +12,7 @@ const pageTitles: Record<string, string> = {
   "/reports": "Reports",
   "/team": "Team Performance",
   "/hubspot": "HubSpot Integration",
+  "/company-matcher": "Company Matcher",
   "/industries": "Industry Breakdown",
   "/tools": "Tool Tracker",
   "/import": "Import Data",
