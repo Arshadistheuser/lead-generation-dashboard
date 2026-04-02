@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { matchCompaniesWithHubSpot } from "@/lib/hubspot-matcher";
 
+// In-memory store for latest match session
+// Persists across requests on the same server process (Render, local dev)
+const globalStore = globalThis as unknown as {
+  __matchSession?: {
+    results: unknown[];
+    summary: { total: number; found: number; notFound: number; possibleMatch: number };
+    createdAt: string;
+  };
+};
+
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
@@ -41,17 +51,17 @@ export async function POST(request: NextRequest) {
     const notFound = matched.filter((m) => m.status === "not_found").length;
     const possible = matched.filter((m) => m.status === "possible_match").length;
 
+    const session = {
+      results: matched,
+      summary: { total: matched.length, found, notFound, possibleMatch: possible },
+      createdAt: new Date().toISOString(),
+    };
+
+    // Store in memory for dashboard to read
+    globalStore.__matchSession = session;
+
     return NextResponse.json(
-      {
-        success: true,
-        results: matched,
-        summary: {
-          total: matched.length,
-          found,
-          notFound,
-          possibleMatch: possible,
-        },
-      },
+      { success: true, ...session },
       { headers: corsHeaders() }
     );
   } catch (error) {
@@ -64,8 +74,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  return NextResponse.json(
-    { status: "ok", message: "Extension API is running" },
-    { headers: corsHeaders() }
-  );
+  const session = globalStore.__matchSession || null;
+  return NextResponse.json({ session }, { headers: corsHeaders() });
 }
