@@ -11,6 +11,7 @@ export interface MatchResult {
   location: string;
   status: "found" | "not_found" | "possible_match";
   matchConfidence?: number;
+  matchedBy?: string;
   hubspotId?: string;
   hubspotName?: string;
   hubspotDomain?: string;
@@ -19,13 +20,14 @@ export interface MatchResult {
 // HubSpot rate limit: 100 requests per 10 seconds
 const limiter = new Bottleneck({
   maxConcurrent: 5,
-  minTime: 120, // ~8 req/sec to stay safely under 10/sec
+  minTime: 120,
 });
 
 export async function matchCompaniesWithHubSpot(
   companies: Array<{
     name: string;
     domain: string;
+    website?: string;
     industry?: string;
     revenue?: string;
     employees?: string;
@@ -46,92 +48,78 @@ export async function matchCompaniesWithHubSpot(
 
     let status: MatchResult["status"] = "not_found";
     let matchConfidence = 0;
+    let matchedBy = "";
     let hubspotId: string | undefined;
     let hubspotName: string | undefined;
     let hubspotDomain: string | undefined;
 
     const domain = cleanDomain(company.domain);
+    const websiteDomain = company.website ? cleanDomain(company.website) : "";
 
     try {
-      // Strategy 1: Search by domain (most reliable)
+      // ── Strategy 1: Match by company domain ──
       if (domain) {
-        const domainResult = await limiter.schedule(() =>
-          client.crm.companies.searchApi.doSearch({
-            filterGroups: [
-              {
-                filters: [
-                  {
-                    propertyName: "domain",
-                    operator: "EQ",
-                    value: domain,
-                  },
-                ],
-              },
-            ],
-            properties: ["name", "domain", "industry"],
-            limit: 1,
-            after: "0",
-            sorts: [],
-          } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
-        );
-
-        if (domainResult.total > 0) {
-          const match = domainResult.results[0];
+        const result = await searchByDomain(client, domain);
+        if (result) {
           status = "found";
           matchConfidence = 100;
-          hubspotId = match.id;
-          hubspotName = match.properties.name || undefined;
-          hubspotDomain = match.properties.domain || undefined;
+          matchedBy = "domain";
+          hubspotId = result.id;
+          hubspotName = result.name;
+          hubspotDomain = result.domain;
         }
       }
 
-      // Strategy 2: Fuzzy name match if no domain match
+      // ── Strategy 2: Match by website domain (if different from company domain) ──
+      if (status === "not_found" && websiteDomain && websiteDomain !== domain) {
+        const result = await searchByDomain(client, websiteDomain);
+        if (result) {
+          status = "found";
+          matchConfidence = 100;
+          matchedBy = "website";
+          hubspotId = result.id;
+          hubspotName = result.name;
+          hubspotDomain = result.domain;
+        }
+      }
+
+      // ── Strategy 3: Match by website property in HubSpot ──
+      if (status === "not_found" && (domain || websiteDomain)) {
+        const searchDomain = domain || websiteDomain;
+        const result = await searchByWebsite(client, searchDomain);
+        if (result) {
+          status = "found";
+          matchConfidence = 95;
+          matchedBy = "hubspot_website";
+          hubspotId = result.id;
+          hubspotName = result.name;
+          hubspotDomain = result.domain;
+        }
+      }
+
+      // ── Strategy 4: Match by company name (fuzzy) ──
       if (status === "not_found" && company.name) {
-        const nameResult = await limiter.schedule(() =>
-          client.crm.companies.searchApi.doSearch({
-            filterGroups: [
-              {
-                filters: [
-                  {
-                    propertyName: "name",
-                    operator: "CONTAINS_TOKEN",
-                    value: getSearchToken(company.name),
-                  },
-                ],
-              },
-            ],
-            properties: ["name", "domain", "industry"],
-            limit: 10,
-            after: "0",
-            sorts: [],
-          } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
-        );
+        const nameResult = await searchByName(client, company.name);
+        if (nameResult) {
+          status = nameResult.score >= 90 ? "found" : "possible_match";
+          matchConfidence = nameResult.score;
+          matchedBy = "name";
+          hubspotId = nameResult.id;
+          hubspotName = nameResult.name;
+          hubspotDomain = nameResult.domain;
+        }
+      }
 
-        if (nameResult.total > 0) {
-          // Use fuzzball to find the best match
-          const candidates = nameResult.results.map((r) => ({
-            id: r.id,
-            name: r.properties.name || "",
-            domain: r.properties.domain || "",
-          }));
-
-          const bestMatch = findBestMatch(company.name, candidates);
-
-          if (bestMatch) {
-            if (bestMatch.score >= 90) {
-              status = "found";
-              matchConfidence = bestMatch.score;
-            } else if (bestMatch.score >= 65) {
-              status = "possible_match";
-              matchConfidence = bestMatch.score;
-            }
-
-            if (status !== "not_found") {
-              hubspotId = bestMatch.id;
-              hubspotName = bestMatch.name;
-              hubspotDomain = bestMatch.domain;
-            }
-          }
+      // ── Strategy 5: Search by "Company Name - Lead Gen" property ──
+      if (status === "not_found" && company.name) {
+        const lgResult = await searchByLeadGenName(client, company.name);
+        if (lgResult) {
+          status = lgResult.score >= 90 ? "found" : "possible_match";
+          matchConfidence = lgResult.score;
+          matchedBy = "leadgen_name";
+          hubspotId = lgResult.id;
+          hubspotName = lgResult.name;
+          hubspotDomain = lgResult.domain;
         }
       }
     } catch (error) {
@@ -147,6 +135,7 @@ export async function matchCompaniesWithHubSpot(
       location: company.location || "",
       status,
       matchConfidence,
+      matchedBy,
       hubspotId,
       hubspotName,
       hubspotDomain,
@@ -156,17 +145,128 @@ export async function matchCompaniesWithHubSpot(
   return results;
 }
 
+// Search HubSpot by domain property
+async function searchByDomain(client: ReturnType<typeof getHubSpotClient>, domain: string) {
+  if (!client) return null;
+  const result = await limiter.schedule(() =>
+    client.crm.companies.searchApi.doSearch({
+      filterGroups: [
+        { filters: [{ propertyName: "domain", operator: "EQ", value: domain }] },
+      ],
+      properties: ["name", "domain", "website", "industry"],
+      limit: 1,
+      after: "0",
+      sorts: [],
+    } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+  );
+
+  if (result.total > 0) {
+    const match = result.results[0];
+    return { id: match.id, name: match.properties.name || "", domain: match.properties.domain || "" };
+  }
+  return null;
+}
+
+// Search HubSpot by website property (contains the domain)
+async function searchByWebsite(client: ReturnType<typeof getHubSpotClient>, domain: string) {
+  if (!client) return null;
+  const result = await limiter.schedule(() =>
+    client.crm.companies.searchApi.doSearch({
+      filterGroups: [
+        { filters: [{ propertyName: "website", operator: "CONTAINS_TOKEN", value: domain.split(".")[0] }] },
+      ],
+      properties: ["name", "domain", "website", "industry"],
+      limit: 5,
+      after: "0",
+      sorts: [],
+    } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+  );
+
+  if (result.total > 0) {
+    // Check if any result's website contains our domain
+    for (const match of result.results) {
+      const hsWebsite = cleanDomain(match.properties.website || "");
+      const hsDomain = cleanDomain(match.properties.domain || "");
+      if (hsWebsite.includes(domain) || domain.includes(hsWebsite) ||
+          hsDomain.includes(domain) || domain.includes(hsDomain)) {
+        return { id: match.id, name: match.properties.name || "", domain: match.properties.domain || "" };
+      }
+    }
+  }
+  return null;
+}
+
+// Search HubSpot by company name with fuzzy matching
+async function searchByName(client: ReturnType<typeof getHubSpotClient>, name: string) {
+  if (!client) return null;
+  const searchToken = getSearchToken(name);
+  if (!searchToken) return null;
+
+  const result = await limiter.schedule(() =>
+    client.crm.companies.searchApi.doSearch({
+      filterGroups: [
+        { filters: [{ propertyName: "name", operator: "CONTAINS_TOKEN", value: searchToken }] },
+      ],
+      properties: ["name", "domain", "website", "industry"],
+      limit: 10,
+      after: "0",
+      sorts: [],
+    } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+  );
+
+  if (result.total > 0) {
+    return findBestMatch(name, result.results.map((r) => ({
+      id: r.id,
+      name: r.properties.name || "",
+      domain: r.properties.domain || "",
+    })));
+  }
+  return null;
+}
+
+// Search by "Company Name - Lead Gen" custom property
+async function searchByLeadGenName(client: ReturnType<typeof getHubSpotClient>, name: string) {
+  if (!client) return null;
+  const searchToken = getSearchToken(name);
+  if (!searchToken) return null;
+
+  try {
+    const result = await limiter.schedule(() =>
+      client.crm.companies.searchApi.doSearch({
+        filterGroups: [
+          { filters: [{ propertyName: "company_name___lead_gen", operator: "CONTAINS_TOKEN", value: searchToken }] },
+        ],
+        properties: ["name", "domain", "website", "company_name___lead_gen"],
+        limit: 10,
+        after: "0",
+        sorts: [],
+      } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+    );
+
+    if (result.total > 0) {
+      return findBestMatch(name, result.results.map((r) => ({
+        id: r.id,
+        name: r.properties.company_name___lead_gen || r.properties.name || "",
+        domain: r.properties.domain || "",
+      })));
+    }
+  } catch {
+    // Property might not exist — that's fine, skip this strategy
+  }
+  return null;
+}
+
 function cleanDomain(raw: string): string {
   if (!raw) return "";
   let domain = raw.toLowerCase().trim();
   domain = domain.replace(/^https?:\/\//, "");
   domain = domain.replace(/^www\./, "");
   domain = domain.replace(/\/.*$/, "");
+  domain = domain.replace(/[?#].*$/, "");
   return domain;
 }
 
 function getSearchToken(name: string): string {
-  // Get the most significant word from company name (skip common words)
   const skipWords = new Set([
     "the", "inc", "llc", "ltd", "corp", "corporation", "company",
     "co", "group", "holdings", "international", "global", "services",
@@ -192,18 +292,16 @@ function findBestMatch(
   let bestCandidate = candidates[0];
 
   for (const candidate of candidates) {
-    // Use token_set_ratio — handles word order differences and extra words
-    // e.g., "Acme Corp" vs "Acme Corporation Inc" → high score
     const score = fuzzball.token_set_ratio(
       searchName.toLowerCase(),
       candidate.name.toLowerCase()
     );
-
     if (score > bestScore) {
       bestScore = score;
       bestCandidate = candidate;
     }
   }
 
+  if (bestScore < 60) return null;
   return { ...bestCandidate, score: bestScore };
 }

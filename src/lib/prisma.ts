@@ -5,15 +5,15 @@ const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 function createPrismaClient() {
   const url = process.env.DATABASE_URL;
 
-  // Production: Postgres via pg adapter
   if (url && url.startsWith("postgres")) {
+    // Production: Postgres via PrismaPg adapter
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { PrismaPg } = require("@prisma/adapter-pg");
     const adapter = new PrismaPg({ connectionString: url });
     return new PrismaClient({ adapter });
   }
 
-  // Local development: SQLite via better-sqlite3 adapter
+  // Local fallback: SQLite via better-sqlite3
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
   // eslint-disable-next-line @typescript-eslint/no-require-imports
