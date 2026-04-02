@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -124,6 +124,22 @@ export default function CompanyMatcherPage() {
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState("");
+
+  // Auto-load results when coming from extension
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") === "extension") {
+      fetch("/api/company-matcher/extension")
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.session) {
+            setResults(data.session.results || []);
+            setSummary(data.session.summary || null);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
   const [filter, setFilter] = useState<"all" | "found" | "not_found" | "possible_match">("all");
 
   // ZoomInfo form state

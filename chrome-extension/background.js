@@ -148,3 +148,10 @@ function generateCSV() {
 
   return [headers.join(","), ...rows].join("\n");
 }
+
+// Toggle widget when toolbar icon is clicked
+chrome.action.onClicked.addListener(async (tab) => {
+  if (tab.url && tab.url.includes("zoominfo.com")) {
+    chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" });
+  }
+});
