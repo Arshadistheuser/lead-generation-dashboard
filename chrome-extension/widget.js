@@ -8,7 +8,92 @@
 
   let state = { capturedCompanies: [], dashboardUrl: "http://localhost:3000", totalCaptured: 0 };
 
-  // ── Build Widget HTML ──
+  // ── Expose extract function from content.js so widget can call it directly ──
+  // Content script and widget run in the same isolated world
+  // so we need to extract companies by querying the DOM directly here too
+
+  function extractCompaniesDirectly() {
+    const companies = [];
+    const seen = new Set();
+
+    // Find all company links
+    const allLinks = document.querySelectorAll("a");
+    for (const link of allLinks) {
+      const href = link.getAttribute("href") || "";
+      const text = (link.textContent || "").replace(/\s+/g, " ").trim();
+
+      if (!text || text.length < 2 || text.length > 150) continue;
+      if (seen.has(text.toLowerCase())) continue;
+
+      const isCompanyLink = href.includes("/company/") || href.includes("/co/") || href.includes("/p/company/");
+      if (!isCompanyLink) continue;
+
+      seen.add(text.toLowerCase());
+
+      // Get container for more data
+      const container = link.closest("tr") || link.closest('[role="row"]') ||
+        link.closest('[class*="row"]') || link.closest('[class*="result"]') ||
+        link.parentElement?.parentElement?.parentElement;
+
+      const allText = container?.textContent || "";
+
+      // Extract domain
+      let domain = "";
+      let website = "";
+      if (container) {
+        for (const a of container.querySelectorAll("a[href]")) {
+          const h = a.getAttribute("href") || "";
+          if (h.includes("zoominfo") || h.includes("linkedin") || h.includes("facebook") ||
+              h.includes("twitter") || h.startsWith("#") || h.startsWith("javascript")) continue;
+          if (h.match(/https?:\/\/[a-zA-Z0-9]/)) {
+            website = h;
+            domain = h.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+            break;
+          }
+          const lt = (a.textContent || "").trim();
+          if (lt && /^[a-z0-9][-a-z0-9]*\.[a-z]{2,}/i.test(lt)) {
+            domain = lt.toLowerCase().replace(/^www\./, "");
+            website = lt;
+            break;
+          }
+        }
+      }
+
+      // Regex fallback for domain
+      if (!domain) {
+        const m = allText.match(/\b([a-zA-Z0-9][-a-zA-Z0-9]{0,62}\.(?:com|io|net|org|co|ai|tech|biz|info|us|uk|de|fr|in|ca|au))\b/gi);
+        if (m) {
+          for (const match of m) {
+            const d = match.toLowerCase();
+            if (!d.includes("zoominfo") && !d.includes("linkedin") && !d.includes("google")) {
+              domain = d.replace(/^www\./, "");
+              website = match;
+              break;
+            }
+          }
+        }
+      }
+
+      companies.push({ name: text, domain, website: website || domain, industry: "", revenue: "", employees: "", location: "" });
+    }
+
+    // Fallback: table rows
+    if (companies.length === 0) {
+      const rows = document.querySelectorAll("table tbody tr");
+      for (const row of rows) {
+        const cells = row.querySelectorAll("td");
+        if (cells.length < 2) continue;
+        const name = (cells[0]?.textContent || "").replace(/\s+/g, " ").trim();
+        if (!name || name.length < 2 || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+        companies.push({ name, domain: "", website: "", industry: "", revenue: "", employees: "", location: "" });
+      }
+    }
+
+    return companies;
+  }
+
+  // ── Build Widget ──
   const widget = document.createElement("div");
   widget.id = "leadgen-widget";
   widget.innerHTML = `
@@ -80,16 +165,14 @@
 
   // Show visible count
   setTimeout(() => {
-    chrome.runtime.sendMessage({ action: "CAPTURE_COMPANIES" }, () => {});
-    const companies = window.__leadgenExtract ? window.__leadgenExtract() : [];
-    q("#lg-visible").textContent = companies.length || "—";
-  }, 1000);
+    const companies = extractCompaniesDirectly();
+    q("#lg-visible").textContent = companies.length;
+  }, 2000);
 
   // ── Make Draggable ──
   let isDragging = false, offsetX = 0, offsetY = 0;
-  const header = q("#leadgen-header");
 
-  header.addEventListener("mousedown", (e) => {
+  q("#leadgen-header").addEventListener("mousedown", (e) => {
     if (e.target.id === "leadgen-close") return;
     isDragging = true;
     offsetX = e.clientX - widget.getBoundingClientRect().left;
@@ -110,13 +193,11 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.action === "TOGGLE_WIDGET") {
       widget.classList.toggle("visible");
-      if (widget.classList.contains("visible")) refreshVisible();
     }
   });
 
   // Start visible
   widget.classList.add("visible");
-  setTimeout(refreshVisible, 1500);
 
   // ── Close Button ──
   q("#leadgen-close").addEventListener("click", () => {
@@ -130,39 +211,45 @@
     state.dashboardUrl = url;
   });
 
-  // ── Capture Button ──
+  // ── Capture Button — extracts directly from DOM, no message passing ──
   q("#lg-captureBtn").addEventListener("click", () => {
     const btn = q("#lg-captureBtn");
     btn.disabled = true;
     btn.innerHTML = '<span class="lg-spinner"></span>Capturing...';
 
-    chrome.runtime.sendMessage({ action: "CAPTURE_COMPANIES" }, () => {});
-
-    // Use content script's extract function
+    // Extract directly — no async message needed
     setTimeout(() => {
-      chrome.runtime.sendMessage({ action: "CAPTURE_CURRENT_PAGE" }, (response) => {
-        if (!response?.success || !response.companies.length) {
-          showAlert("#lg-captureAlert", "info", "No companies found on this page.");
+      const companies = extractCompaniesDirectly();
+
+      if (companies.length === 0) {
+        showAlert("#lg-captureAlert", "info", "No companies found. Make sure you're on a search results page.");
+        resetBtn(btn, "Capture This Page");
+        return;
+      }
+
+      chrome.runtime.sendMessage({ action: "ADD_COMPANIES", companies }, (addResp) => {
+        if (chrome.runtime.lastError || !addResp) {
+          showAlert("#lg-captureAlert", "error", "Extension error. Try refreshing the page.");
           resetBtn(btn, "Capture This Page");
           return;
         }
 
-        chrome.runtime.sendMessage({ action: "ADD_COMPANIES", companies: response.companies }, (addResp) => {
-          state.totalCaptured = addResp.totalCaptured;
-          q("#lg-total").textContent = addResp.totalCaptured;
-          q("#lg-countBadge").textContent = addResp.totalCaptured;
-          showAlert("#lg-captureAlert", "success", `+${response.companies.length} captured (${addResp.totalCaptured} total)`);
+        state.totalCaptured = addResp.totalCaptured;
+        q("#lg-total").textContent = addResp.totalCaptured;
+        q("#lg-countBadge").textContent = addResp.totalCaptured;
+        showAlert("#lg-captureAlert", "success", `+${companies.length} captured (${addResp.totalCaptured} total)`);
 
-          chrome.runtime.sendMessage({ action: "GET_STATE" }, (s) => {
+        chrome.runtime.sendMessage({ action: "GET_STATE" }, (s) => {
+          if (s) {
             state = s;
             updateList();
             updateBtns();
-          });
-
-          resetBtn(btn, "Capture This Page");
+          }
         });
+
+        resetBtn(btn, "Capture This Page");
       });
-    }, 300);
+    }, 500); // Small delay for DOM to be fully rendered
   });
 
   // ── Match Button ──
@@ -174,8 +261,8 @@
     chrome.runtime.sendMessage({ action: "SEND_TO_DASHBOARD" }, (response) => {
       resetBtn(btn, "Match with HubSpot");
 
-      if (!response?.success) {
-        showAlert("#lg-matchAlert", "error", response?.error || "Failed to connect to dashboard");
+      if (chrome.runtime.lastError || !response?.success) {
+        showAlert("#lg-matchAlert", "error", response?.error || "Failed to connect to dashboard. Is it running?");
         return;
       }
 
@@ -224,15 +311,6 @@
 
   // ── Helpers ──
   function q(sel) { return document.querySelector(sel); }
-
-  function refreshVisible() {
-    chrome.runtime.sendMessage({ action: "CHECK_PAGE" }, () => {});
-    setTimeout(() => {
-      chrome.runtime.sendMessage({ action: "CAPTURE_COMPANIES" }, (resp) => {
-        if (resp?.companies) q("#lg-visible").textContent = resp.companies.length;
-      });
-    }, 200);
-  }
 
   function updateList() {
     const list = q("#lg-companyList");

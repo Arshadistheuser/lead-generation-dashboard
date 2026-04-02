@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "@/components/shared/data-table";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ColumnDef } from "@tanstack/react-table";
 import { format } from "date-fns";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { INDUSTRIES } from "@/lib/constants";
 
 interface DailyEntry {
@@ -31,67 +31,83 @@ interface DailyEntry {
   onLeave: boolean;
 }
 
-const columns: ColumnDef<DailyEntry>[] = [
-  {
-    accessorKey: "date",
-    header: "Date",
-    cell: ({ row }) => (
-      <span className="font-mono text-sm">
-        {format(new Date(row.getValue("date")), "MMM dd, yyyy")}
-      </span>
-    ),
-  },
-  {
-    accessorKey: "teamMember.name",
-    header: "Team Member",
-    cell: ({ row }) => row.original.teamMember.name,
-  },
-  {
-    accessorKey: "onLeave",
-    header: "Status",
-    cell: ({ row }) =>
-      row.original.onLeave ? (
-        <Badge variant="secondary">On Leave</Badge>
-      ) : (
-        <Badge variant="default">Active</Badge>
+function getColumns(onDelete: (id: string) => void): ColumnDef<DailyEntry>[] {
+  return [
+    {
+      accessorKey: "date",
+      header: "Date",
+      cell: ({ row }) => (
+        <span className="font-mono text-sm">
+          {format(new Date(row.getValue("date")), "MMM dd, yyyy")}
+        </span>
       ),
-  },
-  {
-    accessorKey: "accountsResearched",
-    header: "Researched",
-    cell: ({ row }) => <span className="font-mono">{row.getValue("accountsResearched")}</span>,
-  },
-  {
-    accessorKey: "accountsAdded",
-    header: "Added",
-    cell: ({ row }) => <span className="font-mono">{row.getValue("accountsAdded")}</span>,
-  },
-  {
-    accessorKey: "contactsAdded",
-    header: "Contacts",
-    cell: ({ row }) => <span className="font-mono">{row.getValue("contactsAdded")}</span>,
-  },
-  {
-    accessorKey: "contactPhoneYes",
-    header: "Phone #",
-    cell: ({ row }) => <span className="font-mono">{row.getValue("contactPhoneYes")}</span>,
-  },
-  {
-    accessorKey: "meetingsSet",
-    header: "Meetings",
-    cell: ({ row }) => <span className="font-mono">{row.getValue("meetingsSet")}</span>,
-  },
-  {
-    accessorKey: "source",
-    header: "Source",
-    cell: ({ row }) => row.original.source || "-",
-  },
-  {
-    accessorKey: "industry",
-    header: "Industry",
-    cell: ({ row }) => row.original.industry || "-",
-  },
-];
+    },
+    {
+      accessorKey: "teamMember.name",
+      header: "Team Member",
+      cell: ({ row }) => row.original.teamMember.name,
+    },
+    {
+      accessorKey: "onLeave",
+      header: "Status",
+      cell: ({ row }) =>
+        row.original.onLeave ? (
+          <Badge variant="secondary">On Leave</Badge>
+        ) : (
+          <Badge variant="default">Active</Badge>
+        ),
+    },
+    {
+      accessorKey: "accountsResearched",
+      header: "Researched",
+      cell: ({ row }) => <span className="font-mono">{row.getValue("accountsResearched")}</span>,
+    },
+    {
+      accessorKey: "accountsAdded",
+      header: "Added",
+      cell: ({ row }) => <span className="font-mono">{row.getValue("accountsAdded")}</span>,
+    },
+    {
+      accessorKey: "contactsAdded",
+      header: "Contacts",
+      cell: ({ row }) => <span className="font-mono">{row.getValue("contactsAdded")}</span>,
+    },
+    {
+      accessorKey: "contactPhoneYes",
+      header: "Phone #",
+      cell: ({ row }) => <span className="font-mono">{row.getValue("contactPhoneYes")}</span>,
+    },
+    {
+      accessorKey: "meetingsSet",
+      header: "Meetings",
+      cell: ({ row }) => <span className="font-mono">{row.getValue("meetingsSet")}</span>,
+    },
+    {
+      accessorKey: "source",
+      header: "Source",
+      cell: ({ row }) => row.original.source || "-",
+    },
+    {
+      accessorKey: "industry",
+      header: "Industry",
+      cell: ({ row }) => row.original.industry || "-",
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      cell: ({ row }) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+          onClick={() => onDelete(row.original.id)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      ),
+    },
+  ];
+}
 
 export default function DailyTrackerPage() {
   const [dateFrom, setDateFrom] = useState(() => {
@@ -101,6 +117,20 @@ export default function DailyTrackerPage() {
   });
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().split("T")[0]);
   const [industry, setIndustry] = useState<string>("all");
+  const queryClient = useQueryClient();
+
+  const handleDelete = useCallback(async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this entry?")) return;
+    try {
+      const res = await fetch(`/api/daily-entries/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete");
+      queryClient.invalidateQueries({ queryKey: ["daily-entries"] });
+    } catch {
+      alert("Failed to delete entry. Please try again.");
+    }
+  }, [queryClient]);
+
+  const columns = useMemo(() => getColumns(handleDelete), [handleDelete]);
 
   const { data: entries, isLoading } = useQuery<DailyEntry[]>({
     queryKey: ["daily-entries", dateFrom, dateTo, industry],
