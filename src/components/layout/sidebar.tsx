@@ -26,12 +26,8 @@ const navItems = [
   { href: "/daily-tracker", label: "Daily Tracker", icon: CalendarDays },
   { href: "/reports", label: "Reports", icon: BarChart3 },
   { href: "/team", label: "Team", icon: Users },
-  { href: "/hubspot", label: "HubSpot", icon: Globe },
   { href: "/company-matcher", label: "Company Matcher", icon: Search },
   { href: "/industries", label: "Industries", icon: Factory },
-  { href: "/tools", label: "Tools", icon: Wrench },
-  { href: "/import", label: "Import", icon: Upload },
-  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {

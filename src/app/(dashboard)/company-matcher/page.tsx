@@ -123,7 +123,7 @@ const columns: ColumnDef<MatchResult>[] = [
           {row.original.hubspotName}
           {row.original.hubspotId && (
             <a
-              href={`https://app.hubspot.com/contacts/companies/${row.original.hubspotId}`}
+              href={`https://app.hubspot.com/contacts/7991245/company/${row.original.hubspotId}`}
               target="_blank"
               rel="noopener noreferrer"
               className="ml-2 text-blue-500 hover:underline"

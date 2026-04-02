@@ -1,15 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { matchCompaniesWithHubSpot } from "@/lib/hubspot-matcher";
-
-// In-memory store for latest match session
-// Persists across requests on the same server process (Render, local dev)
-const globalStore = globalThis as unknown as {
-  __matchSession?: {
-    results: unknown[];
-    summary: { total: number; found: number; notFound: number; possibleMatch: number };
-    createdAt: string;
-  };
-};
+import { prisma } from "@/lib/prisma";
 
 function corsHeaders() {
   return {
@@ -57,8 +48,27 @@ export async function POST(request: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    // Store in memory for dashboard to read
-    globalStore.__matchSession = session;
+    // Store persistently in database
+    try {
+      // Ensure table exists
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "MatchSession" (
+          "id" TEXT PRIMARY KEY,
+          "data" TEXT NOT NULL,
+          "createdAt" DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      const id = `session_${Date.now()}`;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "MatchSession" ("id", "data", "createdAt") VALUES (?, ?, ?)`,
+        id,
+        JSON.stringify(session),
+        new Date().toISOString()
+      );
+    } catch (e) {
+      console.error("Could not save match session:", e);
+    }
 
     return NextResponse.json(
       { success: true, ...session },
@@ -74,6 +84,19 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  const session = globalStore.__matchSession || null;
-  return NextResponse.json({ session }, { headers: corsHeaders() });
+  try {
+    // Read latest session from database
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT "data" FROM "MatchSession" ORDER BY "createdAt" DESC LIMIT 1`
+    ) as Array<{ data: string }>;
+
+    if (rows && rows.length > 0) {
+      const session = JSON.parse(rows[0].data);
+      return NextResponse.json({ session }, { headers: corsHeaders() });
+    }
+  } catch {
+    // Table might not exist yet — that's fine
+  }
+
+  return NextResponse.json({ session: null }, { headers: corsHeaders() });
 }
