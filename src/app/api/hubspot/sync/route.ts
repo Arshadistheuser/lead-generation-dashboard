@@ -32,28 +32,47 @@ export async function POST() {
         getNewCompaniesSince(yesterday),
       ]);
 
-    const snapshot = await prisma.hubSpotSnapshot.upsert({
-      where: {
-        date_teamMemberId: { date: today, teamMemberId: null as unknown as string },
-      },
-      update: {
-        totalContacts,
-        totalCompanies,
-        newContactsToday: newContacts,
-        newCompaniesToday: newCompanies,
-      },
-      create: {
-        date: today,
-        totalContacts,
-        totalCompanies,
-        newContactsToday: newContacts,
-        newCompaniesToday: newCompanies,
-      },
+    // Use a fixed ID for the global snapshot (no team member)
+    const globalId = `global_${today.toISOString().split("T")[0]}`;
+
+    // Try to find existing, otherwise create
+    const existing = await prisma.hubSpotSnapshot.findFirst({
+      where: { id: globalId },
     });
+
+    let snapshot;
+    if (existing) {
+      snapshot = await prisma.hubSpotSnapshot.update({
+        where: { id: globalId },
+        data: {
+          totalContacts,
+          totalCompanies,
+          newContactsToday: newContacts,
+          newCompaniesToday: newCompanies,
+        },
+      });
+    } else {
+      snapshot = await prisma.hubSpotSnapshot.create({
+        data: {
+          id: globalId,
+          date: today,
+          totalContacts,
+          totalCompanies,
+          newContactsToday: newContacts,
+          newCompaniesToday: newCompanies,
+        },
+      });
+    }
 
     return NextResponse.json({
       success: true,
-      snapshot,
+      snapshot: {
+        totalContacts,
+        totalCompanies,
+        newContactsToday: newContacts,
+        newCompaniesToday: newCompanies,
+        syncedAt: new Date().toISOString(),
+      },
     });
   } catch (error) {
     console.error("HubSpot sync error:", error);
