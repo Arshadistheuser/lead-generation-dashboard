@@ -3,22 +3,21 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import { DataTable } from "@/components/shared/data-table";
 import { ColumnDef } from "@tanstack/react-table";
 import {
-  Search,
   Upload,
   Download,
   CheckCircle,
   XCircle,
   AlertCircle,
   Loader2,
+  Globe,
+  RefreshCw,
 } from "lucide-react";
+
 interface MatchResult {
   name: string;
   domain: string;
@@ -76,9 +75,22 @@ const columns: ColumnDef<MatchResult>[] = [
   { accessorKey: "name", header: "Company Name" },
   {
     accessorKey: "domain",
-    header: "Domain",
+    header: "Website / Domain",
     cell: ({ row }) => (
-      <span className="font-mono text-sm">{row.original.domain || "—"}</span>
+      <span className="font-mono text-sm">
+        {row.original.domain ? (
+          <a
+            href={`https://${row.original.domain}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 hover:underline"
+          >
+            {row.original.domain}
+          </a>
+        ) : (
+          "—"
+        )}
+      </span>
     ),
   },
   { accessorKey: "industry", header: "Industry" },
@@ -89,9 +101,17 @@ const columns: ColumnDef<MatchResult>[] = [
     accessorKey: "matchConfidence",
     header: "Confidence",
     cell: ({ row }) => {
-      const confidence = row.original.matchConfidence;
-      if (!confidence) return "—";
-      return <span className="font-mono text-sm">{confidence}%</span>;
+      const c = row.original.matchConfidence;
+      if (!c) return "—";
+      return (
+        <span
+          className={`font-mono text-sm ${
+            c >= 90 ? "text-emerald-500" : c >= 65 ? "text-yellow-500" : "text-muted-foreground"
+          }`}
+        >
+          {c}%
+        </span>
+      );
     },
   },
   {
@@ -122,74 +142,27 @@ export default function CompanyMatcherPage() {
   const [results, setResults] = useState<MatchResult[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState("");
-
-  // Auto-load results when coming from extension
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("source") === "extension") {
-      fetch("/api/company-matcher/extension")
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.session) {
-            setResults(data.session.results || []);
-            setSummary(data.session.summary || null);
-          }
-        })
-        .catch(() => {});
-    }
-  }, []);
   const [filter, setFilter] = useState<"all" | "found" | "not_found" | "possible_match">("all");
-
-  // ZoomInfo form state
-  const [ziEmail, setZiEmail] = useState("");
-  const [ziPassword, setZiPassword] = useState("");
-  const [ziIndustry, setZiIndustry] = useState("");
-  const [ziRevenueMin, setZiRevenueMin] = useState("");
-  const [ziRevenueMax, setZiRevenueMax] = useState("");
-  const [ziCountry, setZiCountry] = useState("");
-  const [ziTechStack, setZiTechStack] = useState("");
-  const [ziMaxResults, setZiMaxResults] = useState("100");
-
-  // Upload state
   const [file, setFile] = useState<File | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
 
-  async function handleScrape() {
-    setLoading(true);
-    setError("");
-    setResults([]);
-    setSummary(null);
-    setLogs(["Starting ZoomInfo scrape..."]);
+  // Auto-load latest results on page load
+  useEffect(() => {
+    loadLatestResults();
+  }, []);
 
+  async function loadLatestResults() {
     try {
-      const res = await fetch("/api/company-matcher/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: ziEmail,
-          password: ziPassword,
-          maxResults: parseInt(ziMaxResults) || 100,
-          filters: {
-            industry: ziIndustry ? ziIndustry.split(",").map((s) => s.trim()) : undefined,
-            revenueMin: ziRevenueMin || undefined,
-            revenueMax: ziRevenueMax || undefined,
-            country: ziCountry ? ziCountry.split(",").map((s) => s.trim()) : undefined,
-            techStack: ziTechStack ? ziTechStack.split(",").map((s) => s.trim()) : undefined,
-          },
-        }),
-      });
-
+      const res = await fetch("/api/company-matcher/extension");
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Scraping failed");
-
-      setResults(data.results || []);
-      setSummary(data.summary || null);
-      setLogs(data.logs || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Scraping failed");
-    } finally {
-      setLoading(false);
+      if (data.session && data.session.results?.length > 0) {
+        setResults(data.session.results);
+        setSummary(data.session.summary);
+        setLastLoadedAt(data.session.createdAt);
+      }
+    } catch {
+      // No results yet — that's fine
     }
   }
 
@@ -259,173 +232,57 @@ export default function CompanyMatcherPage() {
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="scrape">
-        <TabsList>
-          <TabsTrigger value="scrape">
-            <Search className="h-4 w-4 mr-1" /> ZoomInfo Scrape
-          </TabsTrigger>
-          <TabsTrigger value="upload">
-            <Upload className="h-4 w-4 mr-1" /> Upload Excel
-          </TabsTrigger>
-        </TabsList>
+      {/* How to Use + Upload */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Extension Instructions */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Globe className="h-4 w-4" /> Capture from ZoomInfo
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground space-y-2">
+            <ol className="list-decimal pl-4 space-y-1">
+              <li>Install the Globe extension from <code className="font-mono text-xs bg-muted px-1 rounded">chrome://extensions</code></li>
+              <li>Go to ZoomInfo and log in (handle OTP yourself)</li>
+              <li>Apply your filters — the LeadGen widget appears on the page</li>
+              <li>Click <strong>&quot;Capture This Page&quot;</strong> on each page of results</li>
+              <li>Click <strong>&quot;Match with HubSpot&quot;</strong> to check against your CRM</li>
+              <li>Results appear here automatically</li>
+            </ol>
+          </CardContent>
+        </Card>
 
-        {/* ZoomInfo Scrape Tab */}
-        <TabsContent value="scrape">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm font-medium">
-                Scrape ZoomInfo & Match with HubSpot
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>ZoomInfo Email</Label>
-                  <Input
-                    type="email"
-                    value={ziEmail}
-                    onChange={(e) => setZiEmail(e.target.value)}
-                    placeholder="your@email.com"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>ZoomInfo Password</Label>
-                  <Input
-                    type="password"
-                    value={ziPassword}
-                    onChange={(e) => setZiPassword(e.target.value)}
-                    placeholder="Password"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Industries (comma separated)</Label>
-                  <Input
-                    value={ziIndustry}
-                    onChange={(e) => setZiIndustry(e.target.value)}
-                    placeholder="Manufacturing, Retail, Healthcare"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Technology / Tech Stack (comma separated)</Label>
-                  <Input
-                    value={ziTechStack}
-                    onChange={(e) => setZiTechStack(e.target.value)}
-                    placeholder="SAP, Oracle, Microsoft Dynamics"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Revenue Min ($M)</Label>
-                  <Input
-                    value={ziRevenueMin}
-                    onChange={(e) => setZiRevenueMin(e.target.value)}
-                    placeholder="10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Revenue Max ($M)</Label>
-                  <Input
-                    value={ziRevenueMax}
-                    onChange={(e) => setZiRevenueMax(e.target.value)}
-                    placeholder="500"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Countries (comma separated)</Label>
-                  <Input
-                    value={ziCountry}
-                    onChange={(e) => setZiCountry(e.target.value)}
-                    placeholder="United States, India"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Max Results</Label>
-                  <Input
-                    type="number"
-                    value={ziMaxResults}
-                    onChange={(e) => setZiMaxResults(e.target.value)}
-                    placeholder="100"
-                  />
-                </div>
-              </div>
-
-              <Button
-                onClick={handleScrape}
-                disabled={loading || !ziEmail || !ziPassword}
-                className="w-full"
-              >
+        {/* Upload Excel */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Upload className="h-4 w-4" /> Upload Company List
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Or upload an Excel/CSV with &quot;Company Name&quot; and &quot;Website&quot; columns.
+            </p>
+            <div className="flex items-center gap-3">
+              <Input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="flex-1"
+              />
+              <Button onClick={handleUpload} disabled={!file || loading} size="sm">
                 {loading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Scraping & Matching...
-                  </>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                 ) : (
-                  <>
-                    <Search className="h-4 w-4 mr-2" />
-                    Scrape ZoomInfo & Match HubSpot
-                  </>
+                  <Upload className="h-4 w-4 mr-1" />
                 )}
+                {loading ? "Matching..." : "Match"}
               </Button>
-
-              {/* Logs */}
-              {logs.length > 0 && (
-                <div className="bg-muted rounded-md p-3 max-h-40 overflow-y-auto">
-                  <p className="text-xs font-medium text-muted-foreground mb-1">
-                    Progress Log
-                  </p>
-                  {logs.map((log, i) => (
-                    <p key={i} className="text-xs font-mono text-muted-foreground">
-                      {log}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Upload Excel Tab */}
-        <TabsContent value="upload">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm font-medium">
-                Upload Company List & Match with HubSpot
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Upload an Excel or CSV file with company data. The file should have columns
-                like &ldquo;Company Name&rdquo;, &ldquo;Website&rdquo; or &ldquo;Domain&rdquo;.
-                We&apos;ll check each company against HubSpot by domain.
-              </p>
-              <div className="flex items-center gap-3">
-                <Input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  className="flex-1"
-                />
-                <Button onClick={handleUpload} disabled={!file || loading}>
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                  ) : (
-                    <Upload className="h-4 w-4 mr-1" />
-                  )}
-                  {loading ? "Matching..." : "Upload & Match"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {error && (
         <Card className="border-destructive">
@@ -439,44 +296,38 @@ export default function CompanyMatcherPage() {
       {summary && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card
-            className={`cursor-pointer ${filter === "all" ? "ring-2 ring-primary" : ""}`}
+            className={`cursor-pointer transition-all ${filter === "all" ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-muted"}`}
             onClick={() => setFilter("all")}
           >
             <CardContent className="p-4 text-center">
               <p className="text-2xl font-bold font-mono">{summary.total}</p>
-              <p className="text-sm text-muted-foreground">Total Companies</p>
+              <p className="text-sm text-muted-foreground">Total</p>
             </CardContent>
           </Card>
           <Card
-            className={`cursor-pointer ${filter === "found" ? "ring-2 ring-emerald-500" : ""}`}
+            className={`cursor-pointer transition-all ${filter === "found" ? "ring-2 ring-emerald-500" : "hover:ring-1 hover:ring-muted"}`}
             onClick={() => setFilter("found")}
           >
             <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold font-mono text-emerald-500">
-                {summary.found}
-              </p>
+              <p className="text-2xl font-bold font-mono text-emerald-500">{summary.found}</p>
               <p className="text-sm text-muted-foreground">In HubSpot</p>
             </CardContent>
           </Card>
           <Card
-            className={`cursor-pointer ${filter === "not_found" ? "ring-2 ring-red-500" : ""}`}
+            className={`cursor-pointer transition-all ${filter === "not_found" ? "ring-2 ring-red-500" : "hover:ring-1 hover:ring-muted"}`}
             onClick={() => setFilter("not_found")}
           >
             <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold font-mono text-red-500">
-                {summary.notFound}
-              </p>
+              <p className="text-2xl font-bold font-mono text-red-500">{summary.notFound}</p>
               <p className="text-sm text-muted-foreground">Not in HubSpot</p>
             </CardContent>
           </Card>
           <Card
-            className={`cursor-pointer ${filter === "possible_match" ? "ring-2 ring-yellow-500" : ""}`}
+            className={`cursor-pointer transition-all ${filter === "possible_match" ? "ring-2 ring-yellow-500" : "hover:ring-1 hover:ring-muted"}`}
             onClick={() => setFilter("possible_match")}
           >
             <CardContent className="p-4 text-center">
-              <p className="text-2xl font-bold font-mono text-yellow-500">
-                {summary.possibleMatch}
-              </p>
+              <p className="text-2xl font-bold font-mono text-yellow-500">{summary.possibleMatch}</p>
               <p className="text-sm text-muted-foreground">Possible Match</p>
             </CardContent>
           </Card>
@@ -484,27 +335,49 @@ export default function CompanyMatcherPage() {
       )}
 
       {/* Results Table */}
-      {results.length > 0 && (
+      {results.length > 0 ? (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium">
-              Results ({filteredResults.length})
-            </CardTitle>
+            <div>
+              <CardTitle className="text-sm font-medium">
+                Match Results ({filteredResults.length})
+              </CardTitle>
+              {lastLoadedAt && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Last matched: {new Date(lastLoadedAt).toLocaleString()}
+                </p>
+              )}
+            </div>
             <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={loadLatestResults}>
+                <RefreshCw className="h-4 w-4 mr-1" /> Refresh
+              </Button>
               <Button variant="outline" size="sm" onClick={() => handleExport()}>
                 <Download className="h-4 w-4 mr-1" /> Export All
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleExport("not_found")}
-              >
+              <Button variant="outline" size="sm" onClick={() => handleExport("not_found")}>
                 <Download className="h-4 w-4 mr-1" /> Export New Only
               </Button>
             </div>
           </CardHeader>
           <CardContent>
             <DataTable columns={columns} data={filteredResults} pageSize={25} />
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-12 text-center">
+            <div className="text-muted-foreground space-y-2">
+              <Globe className="h-10 w-10 mx-auto opacity-30" />
+              <p className="text-lg font-medium">No match results yet</p>
+              <p className="text-sm">
+                Use the Globe extension on ZoomInfo to capture companies, then click
+                &quot;Match with HubSpot&quot;. Results will appear here.
+              </p>
+              <p className="text-sm">
+                Or upload an Excel/CSV file above to match companies directly.
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
