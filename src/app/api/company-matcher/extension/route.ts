@@ -48,23 +48,14 @@ export async function POST(request: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    // Store persistently in Postgres
+    // Store in database using Prisma model
     try {
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS "MatchSession" (
-          "id" TEXT PRIMARY KEY,
-          "data" TEXT NOT NULL,
-          "createdAt" TIMESTAMP DEFAULT NOW()
-        )
-      `);
-
-      const id = `session_${Date.now()}`;
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO "MatchSession" ("id", "data", "createdAt") VALUES ($1, $2, $3)`,
-        id,
-        JSON.stringify(session),
-        new Date().toISOString()
-      );
+      await prisma.matchSession.create({
+        data: {
+          data: JSON.stringify(session),
+          source: "extension",
+        },
+      });
     } catch (e) {
       console.error("Could not save match session:", e);
     }
@@ -84,16 +75,16 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    const rows = await prisma.$queryRawUnsafe(
-      `SELECT "data" FROM "MatchSession" ORDER BY "createdAt" DESC LIMIT 1`
-    ) as Array<{ data: string }>;
+    const latest = await prisma.matchSession.findFirst({
+      orderBy: { createdAt: "desc" },
+    });
 
-    if (rows && rows.length > 0) {
-      const session = JSON.parse(rows[0].data);
+    if (latest) {
+      const session = JSON.parse(latest.data);
       return NextResponse.json({ session }, { headers: corsHeaders() });
     }
-  } catch {
-    // Table might not exist yet
+  } catch (e) {
+    console.error("Could not read match session:", e);
   }
 
   return NextResponse.json({ session: null }, { headers: corsHeaders() });

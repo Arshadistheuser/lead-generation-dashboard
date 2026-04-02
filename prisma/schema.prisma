@@ -99,3 +99,11 @@ model ToolUsage {
   @@unique([date, teamMemberId, tool])
   @@index([date])
 }
+
+// ─── Match Sessions (Company Matcher results) ────
+model MatchSession {
+  id        String   @id @default(cuid())
+  data      String
+  source    String   @default("extension")
+  createdAt DateTime @default(now())
+}
