@@ -48,20 +48,19 @@ export async function POST(request: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    // Store persistently in database
+    // Store persistently in Postgres
     try {
-      // Ensure table exists
       await prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS "MatchSession" (
           "id" TEXT PRIMARY KEY,
           "data" TEXT NOT NULL,
-          "createdAt" DATETIME DEFAULT CURRENT_TIMESTAMP
+          "createdAt" TIMESTAMP DEFAULT NOW()
         )
       `);
 
       const id = `session_${Date.now()}`;
       await prisma.$executeRawUnsafe(
-        `INSERT INTO "MatchSession" ("id", "data", "createdAt") VALUES (?, ?, ?)`,
+        `INSERT INTO "MatchSession" ("id", "data", "createdAt") VALUES ($1, $2, $3)`,
         id,
         JSON.stringify(session),
         new Date().toISOString()
@@ -85,7 +84,6 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    // Read latest session from database
     const rows = await prisma.$queryRawUnsafe(
       `SELECT "data" FROM "MatchSession" ORDER BY "createdAt" DESC LIMIT 1`
     ) as Array<{ data: string }>;
@@ -95,7 +93,7 @@ export async function GET() {
       return NextResponse.json({ session }, { headers: corsHeaders() });
     }
   } catch {
-    // Table might not exist yet — that's fine
+    // Table might not exist yet
   }
 
   return NextResponse.json({ session: null }, { headers: corsHeaders() });
