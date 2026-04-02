@@ -2,155 +2,97 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LeadGen Matcher</title>
+  <title>LeadGen</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 380px;
+      width: 300px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: #0a0a0a;
       color: #fafafa;
-      font-size: 13px;
+      font-size: 12px;
     }
     .header {
-      padding: 16px;
+      padding: 10px 12px;
       border-bottom: 1px solid rgba(255,255,255,0.1);
       display: flex;
       align-items: center;
-      gap: 8px;
+      justify-content: space-between;
     }
-    .header h1 { font-size: 15px; font-weight: 600; }
-    .header .badge {
+    .header h1 { font-size: 13px; font-weight: 600; }
+    .badge {
       background: #3b82f6;
       color: white;
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 10px;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 8px;
       font-weight: 500;
     }
-    .section {
-      padding: 12px 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-    }
-    .section-title {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: #888;
-      margin-bottom: 8px;
-    }
-    .status-card {
-      background: #1a1a1a;
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 8px;
-    }
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 4px;
-    }
-    .status-row:last-child { margin-bottom: 0; }
-    .status-label { color: #888; }
-    .status-value { font-family: 'SF Mono', monospace; font-weight: 600; }
-    .status-value.green { color: #22c55e; }
-    .status-value.blue { color: #3b82f6; }
+    .section { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-bottom: 4px; }
+    .status-row { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
+    .status-label { color: #888; font-size: 11px; }
+    .status-value { font-family: monospace; font-weight: 600; font-size: 11px; }
+    .green { color: #22c55e; }
+    .red { color: #ef4444; }
+    .yellow { color: #eab308; }
+    .blue { color: #3b82f6; }
     input[type="text"] {
       width: 100%;
       background: #1a1a1a;
       border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border-radius: 4px;
+      padding: 5px 8px;
       color: #fafafa;
-      font-size: 13px;
+      font-size: 11px;
       outline: none;
     }
-    input[type="text"]:focus {
-      border-color: #3b82f6;
-    }
+    input:focus { border-color: #3b82f6; }
     .btn {
       width: 100%;
-      padding: 10px;
+      padding: 7px;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: 4px;
+      font-size: 11px;
       font-weight: 500;
       cursor: pointer;
-      transition: opacity 0.15s;
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
     .btn:hover { opacity: 0.9; }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-primary { background: #3b82f6; color: white; }
     .btn-success { background: #22c55e; color: white; }
-    .btn-outline {
-      background: transparent;
-      color: #888;
-      border: 1px solid rgba(255,255,255,0.15);
-    }
-    .btn-danger { background: #ef4444; color: white; }
+    .btn-outline { background: transparent; color: #888; border: 1px solid rgba(255,255,255,0.15); }
+    .btn-sm { padding: 5px; font-size: 10px; }
+    .btn-row { display: flex; gap: 4px; }
+    .btn-row .btn { flex: 1; }
     .alert {
-      padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 12px;
-      margin-top: 8px;
-    }
-    .alert-success { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
-    .alert-error { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
-    .alert-info { background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); }
-    .company-list {
-      max-height: 200px;
-      overflow-y: auto;
-      margin-top: 8px;
-    }
-    .company-item {
-      display: flex;
-      justify-content: space-between;
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(255,255,255,0.04);
-      font-size: 12px;
-    }
-    .company-name { color: #fafafa; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .company-domain { color: #666; font-family: monospace; font-size: 11px; }
-    .footer {
-      padding: 12px 16px;
-      text-align: center;
-      color: #555;
+      padding: 5px 8px;
+      border-radius: 4px;
       font-size: 11px;
+      margin-top: 4px;
     }
-    .spinner {
-      display: inline-block;
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-top-color: white;
-      border-radius: 50%;
-      animation: spin 0.6s linear infinite;
-      margin-right: 6px;
-      vertical-align: middle;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .alert-success { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .alert-error { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .alert-info { background: rgba(59,130,246,0.15); color: #3b82f6; }
     .hidden { display: none; }
-    .results-summary {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 6px;
-      margin-top: 8px;
-    }
+    .results-row { display: flex; gap: 4px; margin-top: 4px; }
     .result-box {
+      flex: 1;
       background: #1a1a1a;
-      border-radius: 6px;
-      padding: 8px;
+      border-radius: 4px;
+      padding: 6px;
       text-align: center;
     }
-    .result-box .num { font-size: 18px; font-weight: 700; font-family: monospace; }
-    .result-box .label { font-size: 10px; color: #888; margin-top: 2px; }
-    .result-box.green .num { color: #22c55e; }
-    .result-box.red .num { color: #ef4444; }
-    .result-box.yellow .num { color: #eab308; }
+    .result-box .num { font-size: 16px; font-weight: 700; font-family: monospace; }
+    .result-box .label { font-size: 9px; color: #888; }
+    .company-list { max-height: 120px; overflow-y: auto; margin-top: 4px; }
+    .company-item { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 11px; }
+    .company-name { color: #fafafa; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .company-domain { color: #666; font-family: monospace; font-size: 10px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .footer { padding: 6px 12px; text-align: center; color: #444; font-size: 9px; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 4px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -159,89 +101,63 @@
     <span class="badge" id="countBadge">0</span>
   </div>
 
-  <!-- Dashboard URL Config -->
+  <!-- Dashboard URL -->
   <div class="section">
-    <div class="section-title">Dashboard URL</div>
+    <div class="section-title">Dashboard</div>
     <input type="text" id="dashboardUrl" placeholder="http://localhost:3000" />
   </div>
 
-  <!-- Page Status -->
+  <!-- Status -->
   <div class="section">
-    <div class="section-title">Current Page</div>
-    <div class="status-card">
-      <div class="status-row">
-        <span class="status-label">ZoomInfo Page</span>
-        <span class="status-value" id="pageStatus">Checking...</span>
-      </div>
-      <div class="status-row">
-        <span class="status-label">Companies Visible</span>
-        <span class="status-value blue" id="visibleCount">—</span>
-      </div>
+    <div class="status-row">
+      <span class="status-label">Page</span>
+      <span class="status-value" id="pageStatus">...</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Visible</span>
+      <span class="status-value blue" id="visibleCount">—</span>
+    </div>
+    <div class="status-row">
+      <span class="status-label">Captured</span>
+      <span class="status-value green" id="totalCaptured">0</span>
+    </div>
+  </div>
+
+  <!-- Capture -->
+  <div class="section">
+    <button class="btn btn-primary" id="captureBtn" disabled>Capture This Page</button>
+    <div id="captureAlert" class="hidden"></div>
+  </div>
+
+  <!-- Captured list (compact) -->
+  <div class="section" id="listSection">
+    <div class="section-title">Recently Captured</div>
+    <div class="company-list" id="companyList">
+      <div style="color:#555;text-align:center;padding:4px">No companies yet</div>
     </div>
   </div>
 
   <!-- Actions -->
   <div class="section">
-    <div class="section-title">Capture</div>
-    <button class="btn btn-primary" id="captureBtn" disabled>
-      Capture Companies from This Page
-    </button>
-    <div id="captureAlert" class="hidden"></div>
-  </div>
-
-  <!-- Captured Companies -->
-  <div class="section">
-    <div class="section-title">Captured Companies</div>
-    <div class="status-card">
-      <div class="status-row">
-        <span class="status-label">Total Captured</span>
-        <span class="status-value green" id="totalCaptured">0</span>
-      </div>
+    <button class="btn btn-success btn-sm" id="matchBtn" disabled>Match with HubSpot</button>
+    <div class="btn-row">
+      <button class="btn btn-outline btn-sm" id="exportCsvBtn" disabled>CSV</button>
+      <button class="btn btn-outline btn-sm" id="clearBtn">Clear</button>
     </div>
-    <div class="company-list" id="companyList"></div>
-  </div>
-
-  <!-- Send to Dashboard -->
-  <div class="section">
-    <div class="section-title">Match with HubSpot</div>
-    <button class="btn btn-success" id="matchBtn" disabled>
-      Send to Dashboard & Match
-    </button>
-    <button class="btn btn-outline" id="exportCsvBtn" disabled>
-      Export as CSV
-    </button>
-    <button class="btn btn-outline btn-danger" id="clearBtn">
-      Clear All
-    </button>
     <div id="matchAlert" class="hidden"></div>
   </div>
 
-  <!-- Match Results (shown after matching) -->
+  <!-- Results -->
   <div class="section hidden" id="resultsSection">
-    <div class="section-title">Match Results</div>
-    <div class="results-summary">
-      <div class="result-box green">
-        <div class="num" id="foundCount">0</div>
-        <div class="label">In HubSpot</div>
-      </div>
-      <div class="result-box red">
-        <div class="num" id="notFoundCount">0</div>
-        <div class="label">New</div>
-      </div>
-      <div class="result-box yellow">
-        <div class="num" id="possibleCount">0</div>
-        <div class="label">Possible</div>
-      </div>
+    <div class="results-row">
+      <div class="result-box"><div class="num green" id="foundCount">0</div><div class="label">In HubSpot</div></div>
+      <div class="result-box"><div class="num red" id="notFoundCount">0</div><div class="label">New</div></div>
+      <div class="result-box"><div class="num yellow" id="possibleCount">0</div><div class="label">Maybe</div></div>
     </div>
-    <button class="btn btn-outline" id="viewInDashboardBtn" style="margin-top:8px">
-      View Full Results in Dashboard
-    </button>
+    <button class="btn btn-outline btn-sm" id="viewInDashboardBtn" style="margin-top:4px">Open in Dashboard</button>
   </div>
 
-  <div class="footer">
-    Reads visible data only. No automation. No credits used.
-  </div>
-
+  <div class="footer">Reads visible data only. No credits used.</div>
   <script src="popup.js"></script>
 </body>
 </html>

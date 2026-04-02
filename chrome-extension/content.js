@@ -5,18 +5,39 @@
 // =============================================================
 
 (() => {
-  // Only activate on ZoomInfo search/results pages
   if (!window.location.href.includes("zoominfo.com")) return;
 
-  // Listen for capture requests from popup/background
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === "CAPTURE_COMPANIES") {
-      const companies = extractCompanies();
-      sendResponse({ success: true, companies, url: window.location.href });
-    }
+  // Auto-capture: watch for page content changes (user clicks Next)
+  let lastPageContent = "";
+  let autoCapture = false;
 
-    if (message.action === "CAPTURE_CURRENT_PAGE") {
+  const observer = new MutationObserver(() => {
+    if (!autoCapture) return;
+    const currentContent = getPageSignature();
+    if (currentContent !== lastPageContent && currentContent.length > 100) {
+      lastPageContent = currentContent;
+      // Small delay to let page fully render
+      setTimeout(() => {
+        const companies = extractCompanies();
+        if (companies.length > 0) {
+          chrome.runtime.sendMessage({
+            action: "ADD_COMPANIES",
+            companies,
+          });
+        }
+      }, 1500);
+    }
+  });
+
+  function getPageSignature() {
+    const rows = document.querySelectorAll('table tbody tr, [role="row"], a[href*="/company/"]');
+    return Array.from(rows).map(r => r.textContent?.substring(0, 50)).join("|");
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "CAPTURE_COMPANIES" || message.action === "CAPTURE_CURRENT_PAGE") {
       const companies = extractCompanies();
+      lastPageContent = getPageSignature();
       sendResponse({
         success: true,
         companies,
@@ -26,222 +47,201 @@
     }
 
     if (message.action === "CHECK_PAGE") {
+      const companies = extractCompanies();
       sendResponse({
         isZoomInfo: true,
         isSearchResults: isSearchResultsPage(),
+        visibleCount: companies.length,
         url: window.location.href,
       });
     }
 
-    // Must return true to keep the message channel open for async sendResponse
+    if (message.action === "ENABLE_AUTO_CAPTURE") {
+      autoCapture = true;
+      lastPageContent = getPageSignature();
+      observer.observe(document.body, { childList: true, subtree: true });
+      sendResponse({ success: true });
+    }
+
+    if (message.action === "DISABLE_AUTO_CAPTURE") {
+      autoCapture = false;
+      observer.disconnect();
+      sendResponse({ success: true });
+    }
+
     return true;
   });
 
   function isSearchResultsPage() {
     const url = window.location.href.toLowerCase();
-    return (
-      url.includes("search") ||
-      url.includes("results") ||
-      url.includes("company") ||
-      url.includes("list")
-    );
+    return url.includes("search") || url.includes("results") || url.includes("company") || url.includes("list");
   }
 
   function getPageInfo() {
-    // Try to detect pagination info from the page
-    const paginationText =
-      document.querySelector('[class*="pagination"]')?.textContent?.trim() ||
-      document.querySelector('[class*="page-info"]')?.textContent?.trim() ||
-      "";
-
-    const totalResults =
-      document.querySelector('[class*="total-count"]')?.textContent?.trim() ||
-      document.querySelector('[class*="result-count"]')?.textContent?.trim() ||
-      "";
-
+    const paginationText = document.querySelector('[class*="pagination"]')?.textContent?.trim() || "";
+    const totalResults = document.querySelector('[class*="total-count"]')?.textContent?.trim() ||
+      document.querySelector('[class*="result-count"]')?.textContent?.trim() || "";
     return { paginationText, totalResults };
   }
 
   function extractCompanies() {
     const companies = [];
+    const seen = new Set();
 
-    // Strategy 1: Table-based results (most common ZoomInfo layout)
-    const tableRows = document.querySelectorAll(
-      'table tbody tr, [class*="tableRow"], [data-testid*="row"], [role="row"]'
+    // STRATEGY 1: Company links (most reliable for ZoomInfo)
+    const companyLinks = document.querySelectorAll(
+      'a[href*="/company/"], a[href*="/co/"], a[href*="/p/company/"]'
     );
 
-    if (tableRows.length > 0) {
-      for (const row of tableRows) {
-        const company = extractFromRow(row);
-        if (company && company.name) {
-          companies.push(company);
-        }
-      }
+    for (const link of companyLinks) {
+      const name = cleanText(link.textContent);
+      if (!name || name.length < 2 || name.length > 200) continue;
+      if (seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+
+      const container =
+        link.closest("tr") ||
+        link.closest('[class*="row"]') ||
+        link.closest('[class*="result"]') ||
+        link.closest('[class*="card"]') ||
+        link.closest('[class*="item"]') ||
+        link.closest('[role="row"]') ||
+        link.parentElement?.parentElement?.parentElement;
+
+      companies.push(extractData(container, name));
     }
 
-    // Strategy 2: Card/list-based results
+    // STRATEGY 2: Table rows
     if (companies.length === 0) {
-      const cards = document.querySelectorAll(
-        '[class*="company-card"], [class*="result-card"], [class*="list-item"], [class*="search-result"], [class*="CompanyResult"]'
-      );
-
-      for (const card of cards) {
-        const company = extractFromCard(card);
-        if (company && company.name) {
-          companies.push(company);
-        }
-      }
-    }
-
-    // Strategy 3: Generic link-based extraction (fallback)
-    if (companies.length === 0) {
-      const links = document.querySelectorAll(
-        'a[href*="/company/"], a[href*="/co/"], a[href*="/p/company/"]'
-      );
-
-      for (const link of links) {
-        const name = link.textContent?.trim();
-        if (name && name.length > 1 && name.length < 200) {
-          // Walk up to find the containing row/card
-          const container =
-            link.closest("tr") ||
-            link.closest('[class*="row"]') ||
-            link.closest('[class*="card"]') ||
-            link.closest('[class*="result"]') ||
-            link.parentElement?.parentElement;
-
-          const company = container
-            ? extractFromContainer(container, name)
-            : { name, domain: "", industry: "", revenue: "", employees: "", location: "" };
-
-          if (!companies.find((c) => c.name === company.name)) {
-            companies.push(company);
-          }
-        }
+      const rows = document.querySelectorAll('table tbody tr, [role="row"]');
+      for (const row of rows) {
+        const link = row.querySelector("a");
+        const name = cleanText(link?.textContent || row.querySelector("td")?.textContent || "");
+        if (!name || name.length < 2 || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+        companies.push(extractData(row, name));
       }
     }
 
     return companies;
   }
 
-  function extractFromRow(row) {
-    const cells = row.querySelectorAll("td, [role='cell'], [class*='cell']");
-    const links = row.querySelectorAll("a");
+  function extractData(container, name) {
+    if (!container) {
+      return { name, domain: "", website: "", industry: "", revenue: "", employees: "", location: "" };
+    }
 
-    let name = "";
+    const allText = container.textContent || "";
+
+    // ── WEBSITE / DOMAIN ──
+    let website = "";
     let domain = "";
 
-    // Find company name from links (usually the first link in a row)
-    for (const link of links) {
-      const href = link.getAttribute("href") || "";
-      const text = link.textContent?.trim() || "";
+    // 1. Elements with website/domain class
+    for (const sel of ['[class*="website" i]', '[class*="domain" i]', '[class*="url" i]', '[class*="companyUrl" i]', '[data-testid*="website" i]', '[data-testid*="domain" i]']) {
+      try {
+        const el = container.querySelector(sel);
+        if (el) {
+          const t = cleanText(el.textContent);
+          if (t && isDomain(t)) { website = t; domain = cleanDomain(t); break; }
+          const href = el.getAttribute("href") || el.querySelector("a")?.getAttribute("href") || "";
+          if (href && href.includes(".") && !href.includes("zoominfo")) { website = href; domain = cleanDomain(href); break; }
+        }
+      } catch { /* skip */ }
+    }
 
-      if (
-        (href.includes("/company/") || href.includes("/co/") || href.includes("/p/company/")) &&
-        text.length > 1
-      ) {
-        name = text;
-        break;
+    // 2. External links (not zoominfo/social)
+    if (!domain) {
+      for (const a of container.querySelectorAll("a[href]")) {
+        const href = a.getAttribute("href") || "";
+        if (isExternalUrl(href)) {
+          website = href;
+          domain = cleanDomain(href);
+          break;
+        }
+        const t = cleanText(a.textContent);
+        if (t && isDomain(t)) { website = t; domain = cleanDomain(t); break; }
       }
     }
 
-    // Fallback: first cell text
-    if (!name && cells.length > 0) {
-      const firstCellText = cells[0]?.textContent?.trim() || "";
-      if (firstCellText.length > 1 && firstCellText.length < 200) {
-        name = firstCellText;
+    // 3. Regex scan of all text
+    if (!domain) {
+      const m = allText.match(/(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]{0,62}\.(?:com|io|net|org|co|ai|tech|biz|info|us|uk|de|fr|in|ca|au|co\.uk|co\.in))\b/gi);
+      if (m) {
+        for (const match of m) {
+          const d = cleanDomain(match);
+          if (!isSkipDomain(d)) { domain = d; website = match.trim(); break; }
+        }
       }
     }
 
-    if (!name) return null;
+    // 4. Aria-labels, title attributes
+    if (!domain) {
+      for (const el of container.querySelectorAll("[aria-label], [title]")) {
+        const label = el.getAttribute("aria-label") || el.getAttribute("title") || "";
+        if (isDomain(label)) { domain = cleanDomain(label); website = label; break; }
+      }
+    }
 
-    // Extract domain from visible text
-    const allText = row.textContent || "";
-    const domainMatch = allText.match(
-      /([a-zA-Z0-9][-a-zA-Z0-9]*\.(com|io|net|org|co|ai|tech|dev|biz|info|us|uk|de|fr|in|ca|au))/i
-    );
-    if (domainMatch) domain = domainMatch[1].toLowerCase();
+    // 5. Data attributes
+    if (!domain) {
+      for (const el of container.querySelectorAll("[data-website], [data-domain], [data-url]")) {
+        const v = el.getAttribute("data-website") || el.getAttribute("data-domain") || el.getAttribute("data-url") || "";
+        if (v) { domain = cleanDomain(v); website = v; break; }
+      }
+    }
 
     return {
-      name: cleanText(name),
+      name,
       domain,
-      industry: findFieldValue(row, ["industry", "sector"]),
-      revenue: findFieldValue(row, ["revenue", "annual"]),
-      employees: findFieldValue(row, ["employee", "headcount", "people", "staff"]),
-      location: findFieldValue(row, ["location", "headquarters", "hq", "country", "city"]),
+      website: website || domain,
+      industry: findField(container, ["industry", "sector"]),
+      revenue: findField(container, ["revenue", "annual"]),
+      employees: findField(container, ["employee", "headcount", "people", "staff", "size"]),
+      location: findField(container, ["location", "headquarters", "hq", "country", "city"]),
     };
   }
 
-  function extractFromCard(card) {
-    const nameEl =
-      card.querySelector('h3, h4, [class*="company-name"], [class*="name"], [class*="title"]');
-    const name = nameEl?.textContent?.trim() || "";
-
-    if (!name) return null;
-
-    const domainEl = card.querySelector(
-      '[class*="domain"], [class*="website"], [class*="url"]'
-    );
-    const domain = domainEl?.textContent?.trim() || "";
-
-    return {
-      name: cleanText(name),
-      domain: cleanDomain(domain),
-      industry: findFieldValue(card, ["industry", "sector"]),
-      revenue: findFieldValue(card, ["revenue", "annual"]),
-      employees: findFieldValue(card, ["employee", "headcount", "people"]),
-      location: findFieldValue(card, ["location", "headquarters", "hq", "country"]),
-    };
-  }
-
-  function extractFromContainer(container, fallbackName) {
-    const allText = container.textContent || "";
-    const domainMatch = allText.match(
-      /([a-zA-Z0-9][-a-zA-Z0-9]*\.(com|io|net|org|co|ai|tech|dev|biz|info|us|uk|de|fr|in|ca|au))/i
-    );
-
-    return {
-      name: cleanText(fallbackName),
-      domain: domainMatch ? domainMatch[1].toLowerCase() : "",
-      industry: findFieldValue(container, ["industry", "sector"]),
-      revenue: findFieldValue(container, ["revenue", "annual"]),
-      employees: findFieldValue(container, ["employee", "headcount", "people"]),
-      location: findFieldValue(container, ["location", "headquarters", "hq", "country"]),
-    };
-  }
-
-  function findFieldValue(container, keywords) {
-    // Look for elements whose class or aria-label contains any of the keywords
-    for (const keyword of keywords) {
-      const el = container.querySelector(
-        `[class*="${keyword}" i], [data-testid*="${keyword}" i], [aria-label*="${keyword}" i]`
-      );
-      if (el) {
-        const text = el.textContent?.trim();
-        if (text && text.length < 200) return text;
+  function findField(container, keywords) {
+    if (!container) return "";
+    for (const kw of keywords) {
+      for (const sel of [`[class*="${kw}" i]`, `[data-testid*="${kw}" i]`]) {
+        try {
+          const el = container.querySelector(sel);
+          if (el) {
+            const t = cleanText(el.textContent);
+            if (t && t.length < 200) return t;
+          }
+        } catch { /* skip */ }
       }
     }
-
-    // Look in cells by position heuristic (common table layouts)
-    const cells = container.querySelectorAll("td, [role='cell']");
-    // Skip — too unreliable without knowing column headers
     return "";
   }
 
+  function isDomain(text) {
+    if (!text) return false;
+    return /^(?:https?:\/\/)?(?:www\.)?[a-z0-9][-a-z0-9]*\.[a-z]{2,}/i.test(text.trim());
+  }
+
+  function isExternalUrl(href) {
+    if (!href || !href.includes(".")) return false;
+    const skip = ["zoominfo.com", "linkedin.com", "facebook.com", "twitter.com", "javascript:", "mailto:", "#"];
+    return !skip.some(s => href.includes(s)) && /https?:\/\/[a-zA-Z0-9]/.test(href);
+  }
+
+  function isSkipDomain(d) {
+    const skip = ["zoominfo", "linkedin", "facebook", "twitter", "google", "youtube"];
+    return skip.some(s => d.includes(s));
+  }
+
   function cleanText(text) {
-    return (text || "")
-      .replace(/\s+/g, " ")
-      .replace(/[\n\r\t]/g, "")
-      .trim()
-      .substring(0, 200);
+    return (text || "").replace(/\s+/g, " ").replace(/[\n\r\t]/g, "").trim().substring(0, 200);
   }
 
   function cleanDomain(raw) {
     if (!raw) return "";
-    let domain = raw.toLowerCase().trim();
-    domain = domain.replace(/^https?:\/\//, "");
-    domain = domain.replace(/^www\./, "");
-    domain = domain.replace(/\/.*$/, "");
-    return domain;
+    let d = raw.toLowerCase().trim();
+    d = d.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").replace(/[?#].*$/, "");
+    return d;
   }
 })();
