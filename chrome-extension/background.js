@@ -1,23 +1,18 @@
 // =============================================================
 // LeadGen HubSpot Matcher — Background Service Worker
 // Handles data relay between content script and dashboard API.
-// All network requests happen here — invisible to ZoomInfo page.
 // =============================================================
 
-// Default dashboard URL — user configures this in popup
 const DEFAULT_DASHBOARD_URL = "http://localhost:3000";
 
-// Store captured companies across pages
 let capturedCompanies = [];
 let dashboardUrl = DEFAULT_DASHBOARD_URL;
 
-// Load saved settings
 chrome.storage.local.get(["dashboardUrl", "capturedCompanies"], (result) => {
   if (result.dashboardUrl) dashboardUrl = result.dashboardUrl;
   if (result.capturedCompanies) capturedCompanies = result.capturedCompanies;
 });
 
-// Listen for messages from popup and content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
     case "GET_STATE":
@@ -36,10 +31,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case "ADD_COMPANIES":
       addCompanies(message.companies);
-      sendResponse({
-        success: true,
-        totalCaptured: capturedCompanies.length,
-      });
+      sendResponse({ success: true, totalCaptured: capturedCompanies.length });
       break;
 
     case "CLEAR_COMPANIES":
@@ -52,40 +44,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendToDashboard()
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ success: false, error: err.message }));
-      return true; // Keep channel open for async response
+      return true;
 
     case "EXPORT_CSV":
-      const csv = generateCSV();
-      sendResponse({ success: true, csv });
+      sendResponse({ success: true, csv: generateCSV() });
       break;
   }
-
   return true;
 });
 
+// Toggle widget when toolbar icon is clicked
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" });
+  } catch {
+    // Content script not loaded yet — inject it first
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content.js", "widget.js"],
+      });
+      await chrome.scripting.insertCSS({
+        target: { tabId: tab.id },
+        files: ["widget.css"],
+      });
+      // Small delay then toggle
+      setTimeout(() => {
+        chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" }).catch(() => {});
+      }, 500);
+    } catch {
+      // Can't inject — not a valid page
+    }
+  }
+});
+
 function addCompanies(newCompanies) {
-  // Deduplicate by name + domain
   const existing = new Set(
-    capturedCompanies.map((c) => `${c.name.toLowerCase()}|${c.domain.toLowerCase()}`)
+    capturedCompanies.map((c) => `${c.name.toLowerCase()}|${(c.domain || "").toLowerCase()}`)
   );
 
-  let added = 0;
   for (const company of newCompanies) {
     const key = `${company.name.toLowerCase()}|${(company.domain || "").toLowerCase()}`;
     if (!existing.has(key) && company.name) {
-      capturedCompanies.push({
-        ...company,
-        capturedAt: new Date().toISOString(),
-      });
+      capturedCompanies.push({ ...company, capturedAt: new Date().toISOString() });
       existing.add(key);
-      added++;
     }
   }
 
-  // Persist to storage
   chrome.storage.local.set({ capturedCompanies });
-
-  return added;
 }
 
 async function sendToDashboard() {
@@ -94,14 +101,11 @@ async function sendToDashboard() {
   }
 
   try {
-    const response = await fetch(
-      `${dashboardUrl}/api/company-matcher/extension`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companies: capturedCompanies }),
-      }
-    );
+    const response = await fetch(`${dashboardUrl}/api/company-matcher/extension`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companies: capturedCompanies }),
+    });
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -116,42 +120,22 @@ async function sendToDashboard() {
       matchUrl: `${dashboardUrl}/company-matcher?source=extension`,
     };
   } catch (err) {
-    return {
-      success: false,
-      error: `Failed to connect to dashboard: ${err.message}`,
-    };
+    return { success: false, error: `Failed to connect to dashboard: ${err.message}` };
   }
 }
 
 function generateCSV() {
-  const headers = [
-    "Company Name",
-    "Domain",
-    "Industry",
-    "Revenue",
-    "Employees",
-    "Location",
-    "Captured At",
-  ];
-
+  const headers = ["Company Name", "Domain", "Industry", "Revenue", "Employees", "Location", "Captured At"];
   const rows = capturedCompanies.map((c) =>
     [
       `"${(c.name || "").replace(/"/g, '""')}"`,
       c.domain || "",
       `"${(c.industry || "").replace(/"/g, '""')}"`,
       `"${(c.revenue || "").replace(/"/g, '""')}"`,
-      c.employees || "",
+      `"${(c.employees || "").replace(/"/g, '""')}"`,
       `"${(c.location || "").replace(/"/g, '""')}"`,
       c.capturedAt || "",
     ].join(",")
   );
-
   return [headers.join(","), ...rows].join("\n");
 }
-
-// Toggle widget when toolbar icon is clicked
-chrome.action.onClicked.addListener(async (tab) => {
-  if (tab.url && tab.url.includes("zoominfo.com")) {
-    chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" });
-  }
-});

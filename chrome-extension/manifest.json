@@ -5,7 +5,8 @@
   "description": "Capture company data from ZoomInfo and match against HubSpot CRM",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "https://app.zoominfo.com/*"
