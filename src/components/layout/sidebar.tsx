@@ -8,13 +8,8 @@ import {
   CalendarDays,
   BarChart3,
   Users,
-  Globe,
   Factory,
-  Wrench,
-  Upload,
-  Settings,
   Search,
-  LogOut,
   ChevronLeft,
   Menu,
 } from "lucide-react";
@@ -83,15 +78,12 @@ export function Sidebar() {
       </nav>
 
       <div className="p-2 border-t border-border">
-        <button
-          className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent w-full"
-          onClick={() => {
-            window.location.href = "/api/auth/signout";
-          }}
+        <Link
+          href="/daily-tracker/new"
+          className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 w-full justify-center"
         >
-          <LogOut className="h-4 w-4 shrink-0" />
-          {!collapsed && <span>Sign Out</span>}
-        </button>
+          {!collapsed ? "Log Today's Activity" : "+"}
+        </Link>
       </div>
     </aside>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,26 +11,41 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { INDUSTRIES, DATA_SOURCES, TECH_STACKS } from "@/lib/constants";
+import { CheckCircle } from "lucide-react";
 
 export default function NewEntryPage() {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [selectedMember, setSelectedMember] = useState("");
 
   const { data: members } = useQuery<{ id: string; name: string }[]>({
     queryKey: ["team-members"],
     queryFn: () => fetch("/api/team-members").then((r) => r.json()),
   });
 
+  // Remember last selected team member
+  useEffect(() => {
+    const saved = localStorage.getItem("leadgen-member-id");
+    if (saved) setSelectedMember(saved);
+  }, []);
+
+  function handleMemberChange(value: string) {
+    setSelectedMember(value);
+    localStorage.setItem("leadgen-member-id", value);
+  }
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setSaving(true);
     setError("");
+    setSaved(false);
 
     const formData = new FormData(e.currentTarget);
     const body = {
       date: formData.get("date"),
-      teamMemberId: formData.get("teamMemberId"),
+      teamMemberId: selectedMember,
       accountsResearched: Number(formData.get("accountsResearched")) || 0,
       accountsAdded: Number(formData.get("accountsAdded")) || 0,
       contactsAdded: Number(formData.get("contactsAdded")) || 0,
@@ -51,17 +66,41 @@ export default function NewEntryPage() {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error("Failed to save");
-      router.push("/daily-tracker");
+      setSaved(true);
+      setSaving(false);
+      // Auto-redirect after 2 seconds
+      setTimeout(() => router.push("/daily-tracker"), 2000);
     } catch {
       setError("Failed to save entry. It may already exist for this date and member.");
       setSaving(false);
     }
   }
 
+  const memberName = members?.find((m) => m.id === selectedMember)?.name;
+
+  if (saved) {
+    return (
+      <Card className="max-w-md mx-auto">
+        <CardContent className="p-12 text-center space-y-3">
+          <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto" />
+          <p className="text-lg font-semibold">Entry Saved!</p>
+          <p className="text-sm text-muted-foreground">
+            {memberName}&apos;s activity has been recorded. Redirecting...
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="max-w-2xl mx-auto">
       <CardHeader>
-        <CardTitle>New Daily Entry</CardTitle>
+        <CardTitle>Log Daily Activity</CardTitle>
+        {memberName && (
+          <p className="text-sm text-muted-foreground">
+            Logging as <span className="font-medium text-foreground">{memberName}</span>
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -77,10 +116,10 @@ export default function NewEntryPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="teamMemberId">Team Member</Label>
-              <Select name="teamMemberId" required>
+              <Label htmlFor="teamMemberId">Your Name</Label>
+              <Select value={selectedMember} onValueChange={(v) => handleMemberChange(v ?? "")} required>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select member" />
+                  <SelectValue placeholder="Select your name" />
                 </SelectTrigger>
                 <SelectContent>
                   {members?.map((m) => (
@@ -93,7 +132,7 @@ export default function NewEntryPage() {
 
           <div className="flex items-center gap-2">
             <Switch id="onLeave" name="onLeave" />
-            <Label htmlFor="onLeave">On Leave</Label>
+            <Label htmlFor="onLeave">On Leave Today</Label>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
@@ -179,7 +218,7 @@ export default function NewEntryPage() {
             <Button type="button" variant="outline" onClick={() => router.back()}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving || !selectedMember}>
               {saving ? "Saving..." : "Save Entry"}
             </Button>
           </div>
