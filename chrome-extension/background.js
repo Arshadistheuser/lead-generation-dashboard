@@ -1,9 +1,10 @@
 // =============================================================
 // LeadGen HubSpot Matcher — Background Service Worker
-// Handles data relay between content script and dashboard API.
+// ALL network requests happen here (bypasses CORS/mixed content)
 // =============================================================
 
-const DEFAULT_DASHBOARD_URL = "http://localhost:3000";
+// Default to Render URL (HTTPS) — works from any machine
+const DEFAULT_DASHBOARD_URL = "https://lead-gen-dashboard-65lx.onrender.com";
 
 let capturedCompanies = [];
 let dashboardUrl = DEFAULT_DASHBOARD_URL;
@@ -44,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendToDashboard()
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ success: false, error: err.message }));
-      return true;
+      return true; // Keep channel open for async
 
     case "EXPORT_CSV":
       sendResponse({ success: true, csv: generateCSV() });
@@ -59,7 +60,6 @@ chrome.action.onClicked.addListener(async (tab) => {
   try {
     await chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" });
   } catch {
-    // Content script not loaded yet — inject it first
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -69,12 +69,11 @@ chrome.action.onClicked.addListener(async (tab) => {
         target: { tabId: tab.id },
         files: ["widget.css"],
       });
-      // Small delay then toggle
       setTimeout(() => {
         chrome.tabs.sendMessage(tab.id, { action: "TOGGLE_WIDGET" }).catch(() => {});
       }, 500);
     } catch {
-      // Can't inject — not a valid page
+      // Can't inject
     }
   }
 });
@@ -100,16 +99,38 @@ async function sendToDashboard() {
     return { success: false, error: "No companies captured yet" };
   }
 
+  // Clean the URL
+  const url = dashboardUrl.replace(/\/+$/, "");
+  const endpoint = `${url}/api/company-matcher/extension`;
+
   try {
-    const response = await fetch(`${dashboardUrl}/api/company-matcher/extension`, {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ companies: capturedCompanies }),
+      signal: controller.signal,
     });
 
+    clearTimeout(timeout);
+
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `HTTP ${response.status}`);
+      const text = await response.text().catch(() => "");
+      // Check if we got HTML instead of JSON (wrong URL or 404)
+      if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+        throw new Error("Dashboard returned HTML instead of JSON. Check the Dashboard URL in the widget.");
+      }
+      try {
+        const errData = JSON.parse(text);
+        throw new Error(errData.error || `HTTP ${response.status}`);
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          throw new Error(`HTTP ${response.status}: ${text.substring(0, 100)}`);
+        }
+        throw e;
+      }
     }
 
     const data = await response.json();
@@ -117,10 +138,14 @@ async function sendToDashboard() {
       success: true,
       results: data.results,
       summary: data.summary,
-      matchUrl: `${dashboardUrl}/company-matcher?source=extension`,
+      matchUrl: `${url}/company-matcher?source=extension`,
     };
   } catch (err) {
-    return { success: false, error: `Failed to connect to dashboard: ${err.message}` };
+    const msg = err.name === "AbortError"
+      ? "Request timed out (60s). The dashboard might be sleeping — try again in 30 seconds."
+      : `${err.message}`;
+
+    return { success: false, error: msg };
   }
 }
 

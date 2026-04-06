@@ -9,7 +9,9 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://app.zoominfo.com/*"
+    "https://app.zoominfo.com/*",
+    "https://lead-gen-dashboard-65lx.onrender.com/*",
+    "http://localhost:3000/*"
   ],
   "content_scripts": [
     {

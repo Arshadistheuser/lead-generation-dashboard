@@ -6,7 +6,7 @@
 (() => {
   if (document.getElementById("leadgen-widget")) return;
 
-  let state = { capturedCompanies: [], dashboardUrl: "http://localhost:3000", totalCaptured: 0 };
+  let state = { capturedCompanies: [], dashboardUrl: "https://lead-gen-dashboard-65lx.onrender.com", totalCaptured: 0 };
 
   // ══════════════════════════════════════════════════════
   // EXTRACT: Read ZoomInfo's table with ALL visible columns
@@ -157,7 +157,7 @@
     <div id="leadgen-body">
       <div class="lg-section">
         <div class="lg-section-title">Dashboard URL</div>
-        <input type="text" id="lg-dashUrl" value="http://localhost:3000" />
+        <input type="text" id="lg-dashUrl" value="https://lead-gen-dashboard-65lx.onrender.com" />
       </div>
       <div class="lg-section">
         <div class="lg-status-row">
