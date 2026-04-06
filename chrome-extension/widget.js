@@ -201,6 +201,32 @@
 
   document.body.appendChild(widget);
 
+  // ── PERSIST WIDGET: Re-attach if ZoomInfo's SPA removes it ──
+  const persistObserver = new MutationObserver(() => {
+    if (!document.getElementById("leadgen-widget")) {
+      document.body.appendChild(widget);
+      widget.classList.add("visible");
+    }
+  });
+  persistObserver.observe(document.body, { childList: true, subtree: false });
+
+  // Also re-check on URL changes (SPA navigation)
+  let lastUrl = window.location.href;
+  setInterval(() => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      if (!document.getElementById("leadgen-widget")) {
+        document.body.appendChild(widget);
+        widget.classList.add("visible");
+      }
+      // Update visible count for new page
+      setTimeout(() => {
+        const c = extractCompaniesDirectly();
+        q("#lg-visible").textContent = c.length;
+      }, 2000);
+    }
+  }, 1000);
+
   // Load state
   chrome.runtime.sendMessage({ action: "GET_STATE" }, (r) => {
     if (chrome.runtime.lastError || !r) return;
@@ -286,16 +312,27 @@
     }, 500);
   });
 
-  // ── MATCH ──
-  q("#lg-matchBtn").addEventListener("click", () => {
+  // ── MATCH (with wake-up ping + progress) ──
+  q("#lg-matchBtn").addEventListener("click", async () => {
     const btn = q("#lg-matchBtn");
     btn.disabled = true;
-    btn.innerHTML = '<span class="lg-spinner"></span>Matching...';
+    btn.innerHTML = '<span class="lg-spinner"></span>Waking up server...';
+    showAlert("#lg-matchAlert", "info", "Waking up dashboard server... this may take 30s on first use.");
 
+    // Step 1: Wake up Render (free tier sleeps after 15 min)
+    try {
+      const dashUrl = state.dashboardUrl.replace(/\/+$/, "");
+      await fetch(`${dashUrl}/api/team-members`, { signal: AbortSignal.timeout(45000) }).catch(() => {});
+    } catch { /* ignore wake-up errors */ }
+
+    btn.innerHTML = '<span class="lg-spinner"></span>Matching ' + state.totalCaptured + ' companies...';
+    showAlert("#lg-matchAlert", "info", "Matching " + state.totalCaptured + " companies against HubSpot...");
+
+    // Step 2: Send for matching
     chrome.runtime.sendMessage({ action: "SEND_TO_DASHBOARD" }, (response) => {
       resetBtn(btn, "Match with HubSpot");
       if (chrome.runtime.lastError || !response?.success) {
-        showAlert("#lg-matchAlert", "error", response?.error || "Failed to connect to dashboard.");
+        showAlert("#lg-matchAlert", "error", response?.error || "Failed to connect. Try again in 30s.");
         return;
       }
       const s = response.summary;

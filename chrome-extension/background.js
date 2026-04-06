@@ -105,7 +105,7 @@ async function sendToDashboard() {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+    const timeout = setTimeout(() => controller.abort(), 180000); // 3 min timeout for large batches
 
     const response = await fetch(endpoint, {
       method: "POST",
@@ -142,7 +142,7 @@ async function sendToDashboard() {
     };
   } catch (err) {
     const msg = err.name === "AbortError"
-      ? "Request timed out (60s). The dashboard might be sleeping — try again in 30 seconds."
+      ? "Request timed out. The dashboard might be sleeping — try again in 30 seconds."
       : `${err.message}`;
 
     return { success: false, error: msg };
