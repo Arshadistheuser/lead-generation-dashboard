@@ -18,9 +18,10 @@ export interface MatchResult {
 }
 
 // HubSpot rate limit: 100 requests per 10 seconds
+// Use 10 concurrent with 50ms gap = ~20 req/sec (well under limit)
 const limiter = new Bottleneck({
-  maxConcurrent: 5,
-  minTime: 120,
+  maxConcurrent: 10,
+  minTime: 50,
 });
 
 export async function matchCompaniesWithHubSpot(
@@ -110,17 +111,7 @@ export async function matchCompaniesWithHubSpot(
         }
       }
 
-      // ── Strategy 5: Search by "Company Name - Lead Gen" property ──
-      if (status === "not_found" && company.name) {
-        const lgResult = await searchByLeadGenName(client, company.name);
-        if (lgResult) {
-          status = lgResult.score >= 90 ? "found" : "possible_match";
-          matchConfidence = lgResult.score;
-          matchedBy = "leadgen_name";
-          hubspotId = lgResult.id;
-          hubspotName = lgResult.name;
-          hubspotDomain = lgResult.domain;
-        }
+      // Strategy 5 removed — too slow for batch matching
       }
     } catch (error) {
       console.error(`Error matching ${company.name}:`, error);
