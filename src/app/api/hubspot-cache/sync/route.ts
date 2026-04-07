@@ -2,29 +2,12 @@ import { NextResponse } from "next/server";
 import { getHubSpotClient } from "@/lib/hubspot";
 import { prisma } from "@/lib/prisma";
 
-export const maxDuration = 300; // 5 minutes for large syncs
-
-export async function POST() {
+// Background sync — fires and forgets so the HTTP response returns immediately
+async function syncInBackground() {
   const client = getHubSpotClient();
-  if (!client) {
-    return NextResponse.json({ error: "HubSpot not configured" }, { status: 500 });
-  }
-
-  // Check if already syncing
-  const status = await prisma.hubSpotCacheStatus.findUnique({ where: { id: "singleton" } });
-  if (status?.syncing) {
-    return NextResponse.json({ error: "Sync already in progress", status: "syncing" }, { status: 409 });
-  }
-
-  // Mark as syncing
-  await prisma.hubSpotCacheStatus.upsert({
-    where: { id: "singleton" },
-    create: { id: "singleton", syncing: true, totalCached: 0 },
-    update: { syncing: true },
-  });
+  if (!client) return;
 
   try {
-    // Fetch ALL companies from HubSpot using pagination
     let after: string | undefined = undefined;
     let totalFetched = 0;
     const BATCH_SIZE = 100;
@@ -32,7 +15,6 @@ export async function POST() {
 
     console.log("[HubSpot Cache] Starting full sync...");
 
-     
     while (true) {
       const page = await client.crm.companies.basicApi.getPage(
         BATCH_SIZE,
@@ -53,7 +35,15 @@ export async function POST() {
       }
 
       totalFetched += page.results.length;
-      console.log(`[HubSpot Cache] Fetched ${totalFetched} companies...`);
+
+      // Update progress every 1000 companies
+      if (totalFetched % 1000 < BATCH_SIZE) {
+        console.log(`[HubSpot Cache] Fetched ${totalFetched} companies...`);
+        await prisma.hubSpotCacheStatus.update({
+          where: { id: "singleton" },
+          data: { totalCached: totalFetched },
+        });
+      }
 
       if (page.paging?.next?.after) {
         after = page.paging.next.after;
@@ -67,7 +57,6 @@ export async function POST() {
     // Clear old cache and insert new data in batches
     await prisma.hubSpotCompanyCache.deleteMany();
 
-    // Insert in batches of 500
     const INSERT_BATCH = 500;
     for (let i = 0; i < allCompanies.length; i += INSERT_BATCH) {
       const batch = allCompanies.slice(i, i + INSERT_BATCH);
@@ -77,32 +66,43 @@ export async function POST() {
       });
     }
 
-    // Update status
-    await prisma.hubSpotCacheStatus.upsert({
+    await prisma.hubSpotCacheStatus.update({
       where: { id: "singleton" },
-      create: { id: "singleton", totalCached: allCompanies.length, syncing: false, lastSyncAt: new Date() },
-      update: { totalCached: allCompanies.length, syncing: false, lastSyncAt: new Date() },
+      data: { totalCached: allCompanies.length, syncing: false, lastSyncAt: new Date() },
     });
 
     console.log(`[HubSpot Cache] Sync complete. ${allCompanies.length} companies cached.`);
-
-    return NextResponse.json({
-      success: true,
-      totalCached: allCompanies.length,
-    });
   } catch (error) {
     console.error("[HubSpot Cache] Sync failed:", error);
-
-    // Mark as not syncing
-    await prisma.hubSpotCacheStatus.upsert({
+    await prisma.hubSpotCacheStatus.update({
       where: { id: "singleton" },
-      create: { id: "singleton", syncing: false, totalCached: 0 },
-      update: { syncing: false },
-    });
-
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Sync failed" },
-      { status: 500 }
-    );
+      data: { syncing: false },
+    }).catch(() => {});
   }
+}
+
+export async function POST() {
+  const client = getHubSpotClient();
+  if (!client) {
+    return NextResponse.json({ error: "HubSpot not configured" }, { status: 500 });
+  }
+
+  // Check if already syncing
+  const status = await prisma.hubSpotCacheStatus.findUnique({ where: { id: "singleton" } });
+  if (status?.syncing) {
+    return NextResponse.json({ message: "Sync already in progress", syncing: true });
+  }
+
+  // Mark as syncing
+  await prisma.hubSpotCacheStatus.upsert({
+    where: { id: "singleton" },
+    create: { id: "singleton", syncing: true, totalCached: 0 },
+    update: { syncing: true, totalCached: 0 },
+  });
+
+  // Fire and forget — don't await
+  syncInBackground();
+
+  // Return immediately
+  return NextResponse.json({ message: "Sync started", syncing: true });
 }
