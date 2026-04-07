@@ -17,8 +17,8 @@ export interface MatchResult {
 }
 
 /**
- * Match companies against the local HubSpot cache in Postgres.
- * No HubSpot API calls — all matching is done locally.
+ * Match companies against local HubSpot cache using BULK queries.
+ * Instead of 4 queries per company, we do 2-3 queries TOTAL.
  */
 export async function matchCompaniesLocal(
   companies: Array<{
@@ -29,124 +29,130 @@ export async function matchCompaniesLocal(
     revenue?: string;
     employees?: string;
     location?: string;
-  }>,
-  onProgress?: (done: number, total: number) => void
+  }>
 ): Promise<MatchResult[]> {
-  const results: MatchResult[] = [];
+  // Step 1: Clean all domains upfront
+  const companiesWithClean = companies.map((c) => ({
+    ...c,
+    cleanDomain: cleanDomain(c.domain),
+    cleanWebsite: c.website ? cleanDomain(c.website) : "",
+  }));
 
-  for (let i = 0; i < companies.length; i++) {
-    const company = companies[i];
-    onProgress?.(i + 1, companies.length);
+  // Step 2: Collect ALL unique domains to search (one big query)
+  const allDomains = new Set<string>();
+  for (const c of companiesWithClean) {
+    if (c.cleanDomain) allDomains.add(c.cleanDomain);
+    if (c.cleanWebsite) allDomains.add(c.cleanWebsite);
+  }
 
-    let status: MatchResult["status"] = "not_found";
-    let matchConfidence = 0;
-    let matchedBy = "";
-    let hubspotId: string | undefined;
-    let hubspotName: string | undefined;
-    let hubspotDomain: string | undefined;
+  // Step 3: SINGLE query — fetch all HubSpot companies matching ANY of these domains
+  const domainMatches = allDomains.size > 0
+    ? await prisma.hubSpotCompanyCache.findMany({
+        where: { domain: { in: Array.from(allDomains) } },
+      })
+    : [];
 
-    const domain = cleanDomain(company.domain);
-    const websiteDomain = company.website ? cleanDomain(company.website) : "";
+  // Build domain → match lookup
+  const domainMap = new Map<string, { id: string; name: string; domain: string }>();
+  for (const m of domainMatches) {
+    if (m.domain && !domainMap.has(m.domain)) {
+      domainMap.set(m.domain, { id: m.id, name: m.name, domain: m.domain });
+    }
+  }
 
-    try {
-      // Strategy 1: Exact domain match
-      if (domain) {
-        const match = await prisma.hubSpotCompanyCache.findFirst({
-          where: { domain },
-        });
-        if (match) {
-          status = "found";
-          matchConfidence = 100;
-          matchedBy = "domain";
-          hubspotId = match.id;
-          hubspotName = match.name;
-          hubspotDomain = match.domain;
-        }
-      }
+  // Step 4: For unmatched companies, try name-based search
+  // Collect search tokens for companies that didn't match by domain
+  const unmatchedByName: Array<{ index: number; name: string; token: string }> = [];
+  const resultMap = new Map<number, Partial<MatchResult>>();
 
-      // Strategy 2: Match by website domain (if different)
-      if (status === "not_found" && websiteDomain && websiteDomain !== domain) {
-        const match = await prisma.hubSpotCompanyCache.findFirst({
-          where: { domain: websiteDomain },
-        });
-        if (match) {
-          status = "found";
-          matchConfidence = 100;
-          matchedBy = "website";
-          hubspotId = match.id;
-          hubspotName = match.name;
-          hubspotDomain = match.domain;
-        }
-      }
+  for (let i = 0; i < companiesWithClean.length; i++) {
+    const c = companiesWithClean[i];
 
-      // Strategy 3: Domain contained in website field
-      if (status === "not_found" && (domain || websiteDomain)) {
-        const searchDomain = domain || websiteDomain;
-        const match = await prisma.hubSpotCompanyCache.findFirst({
-          where: {
-            OR: [
-              { website: { contains: searchDomain, mode: "insensitive" } },
-              { domain: { contains: searchDomain, mode: "insensitive" } },
-            ],
-          },
-        });
-        if (match) {
-          status = "found";
-          matchConfidence = 95;
-          matchedBy = "hubspot_website";
-          hubspotId = match.id;
-          hubspotName = match.name;
-          hubspotDomain = match.domain;
-        }
-      }
-
-      // Strategy 4: Fuzzy name match
-      if (status === "not_found" && company.name) {
-        const searchToken = getSearchToken(company.name);
-        if (searchToken) {
-          // Find candidates whose name contains the primary keyword
-          const candidates = await prisma.hubSpotCompanyCache.findMany({
-            where: { name: { contains: searchToken, mode: "insensitive" } },
-            take: 20,
-          });
-
-          if (candidates.length > 0) {
-            const best = findBestMatch(
-              company.name,
-              candidates.map((c) => ({ id: c.id, name: c.name, domain: c.domain }))
-            );
-            if (best) {
-              status = best.score >= 90 ? "found" : "possible_match";
-              matchConfidence = best.score;
-              matchedBy = "name";
-              hubspotId = best.id;
-              hubspotName = best.name;
-              hubspotDomain = best.domain;
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error matching ${company.name}:`, error);
+    // Try domain match first
+    const domainHit = domainMap.get(c.cleanDomain) || (c.cleanWebsite ? domainMap.get(c.cleanWebsite) : null);
+    if (domainHit) {
+      resultMap.set(i, {
+        status: "found",
+        matchConfidence: 100,
+        matchedBy: "domain",
+        hubspotId: domainHit.id,
+        hubspotName: domainHit.name,
+        hubspotDomain: domainHit.domain,
+      });
+      continue;
     }
 
-    results.push({
+    // Queue for name matching
+    if (c.name) {
+      const token = getSearchToken(c.name);
+      if (token) {
+        unmatchedByName.push({ index: i, name: c.name, token });
+      }
+    }
+  }
+
+  // Step 5: Batch name matching — one query per unique token (deduplicated)
+  if (unmatchedByName.length > 0) {
+    const uniqueTokens = [...new Set(unmatchedByName.map((u) => u.token))];
+
+    // Single query: get all candidates whose name contains any of our tokens
+    // Postgres doesn't support OR-based ILIKE in a single `in`, so use OR conditions
+    const nameCandidates = await prisma.hubSpotCompanyCache.findMany({
+      where: {
+        OR: uniqueTokens.map((token) => ({
+          name: { contains: token, mode: "insensitive" as const },
+        })),
+      },
+      take: 2000, // cap to avoid memory issues
+    });
+
+    // For each unmatched company, fuzzy match against candidates containing their token
+    for (const item of unmatchedByName) {
+      if (resultMap.has(item.index)) continue; // already matched
+
+      const tokenLower = item.token.toLowerCase();
+      const relevant = nameCandidates.filter((c) =>
+        c.name.toLowerCase().includes(tokenLower)
+      );
+
+      if (relevant.length === 0) continue;
+
+      const best = findBestMatch(
+        item.name,
+        relevant.map((c) => ({ id: c.id, name: c.name, domain: c.domain }))
+      );
+
+      if (best) {
+        resultMap.set(item.index, {
+          status: best.score >= 90 ? "found" : "possible_match",
+          matchConfidence: best.score,
+          matchedBy: "name",
+          hubspotId: best.id,
+          hubspotName: best.name,
+          hubspotDomain: best.domain,
+        });
+      }
+    }
+  }
+
+  // Step 6: Build final results
+  return companies.map((company, i) => {
+    const match = resultMap.get(i);
+    return {
       name: company.name,
       domain: company.domain,
       industry: company.industry || "",
       revenue: company.revenue || "",
       employees: company.employees || "",
       location: company.location || "",
-      status,
-      matchConfidence,
-      matchedBy,
-      hubspotId,
-      hubspotName,
-      hubspotDomain,
-    });
-  }
-
-  return results;
+      status: match?.status || "not_found",
+      matchConfidence: match?.matchConfidence || 0,
+      matchedBy: match?.matchedBy || "",
+      hubspotId: match?.hubspotId,
+      hubspotName: match?.hubspotName,
+      hubspotDomain: match?.hubspotDomain,
+    };
+  });
 }
 
 function cleanDomain(raw: string): string {
