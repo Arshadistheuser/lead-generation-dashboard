@@ -107,3 +107,21 @@ model MatchSession {
   source    String   @default("extension")
   createdAt DateTime @default(now())
 }
+
+// ─── HubSpot Company Cache (local mirror for instant matching) ────
+model HubSpotCompanyCache {
+  id        String  @id // HubSpot company ID
+  name      String  @default("")
+  domain    String  @default("")
+  website   String  @default("")
+
+  @@index([domain])
+  @@index([name])
+}
+
+model HubSpotCacheStatus {
+  id          String   @id @default("singleton")
+  totalCached Int      @default(0)
+  lastSyncAt  DateTime @default(now())
+  syncing     Boolean  @default(false)
+}

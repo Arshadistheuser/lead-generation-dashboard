@@ -16,6 +16,7 @@ import {
   Loader2,
   Globe,
   RefreshCw,
+  Database,
 } from "lucide-react";
 
 interface MatchResult {
@@ -138,6 +139,13 @@ const columns: ColumnDef<MatchResult>[] = [
   },
 ];
 
+interface CacheStatus {
+  cached: boolean;
+  totalCached: number;
+  syncing: boolean;
+  lastSyncAt: string | null;
+}
+
 export default function CompanyMatcherPage() {
   const [results, setResults] = useState<MatchResult[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -146,11 +154,49 @@ export default function CompanyMatcherPage() {
   const [filter, setFilter] = useState<"all" | "found" | "not_found" | "possible_match">("all");
   const [file, setFile] = useState<File | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
-  // Auto-load latest results on page load
+  // Auto-load latest results + cache status on page load
   useEffect(() => {
     loadLatestResults();
+    loadCacheStatus();
   }, []);
+
+  // Poll cache status while syncing
+  useEffect(() => {
+    if (!syncing) return;
+    const interval = setInterval(loadCacheStatus, 5000);
+    return () => clearInterval(interval);
+  }, [syncing]);
+
+  async function loadCacheStatus() {
+    try {
+      const res = await fetch("/api/hubspot-cache/status");
+      const data: CacheStatus = await res.json();
+      setCacheStatus(data);
+      if (data.syncing) {
+        setSyncing(true);
+      } else if (syncing && data.totalCached > 0) {
+        setSyncing(false);
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setError("");
+    try {
+      const res = await fetch("/api/hubspot-cache/sync", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      await loadCacheStatus();
+      setSyncing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sync failed");
+      setSyncing(false);
+    }
+  }
 
   async function loadLatestResults() {
     try {
@@ -232,6 +278,59 @@ export default function CompanyMatcherPage() {
 
   return (
     <div className="space-y-6">
+      {/* HubSpot Cache Status */}
+      <Card className={cacheStatus?.cached ? "border-emerald-200 bg-emerald-50/50" : "border-amber-200 bg-amber-50/50"}>
+        <CardContent className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Database className={`h-5 w-5 ${cacheStatus?.cached ? "text-emerald-600" : "text-amber-600"}`} />
+            <div>
+              {cacheStatus?.cached ? (
+                <>
+                  <p className="text-sm font-medium text-emerald-800">
+                    HubSpot Cache: {cacheStatus.totalCached.toLocaleString()} companies loaded
+                  </p>
+                  <p className="text-xs text-emerald-600">
+                    Last synced: {cacheStatus.lastSyncAt ? new Date(cacheStatus.lastSyncAt).toLocaleString() : "Never"}
+                    {" — "}Matching is instant
+                  </p>
+                </>
+              ) : syncing ? (
+                <>
+                  <p className="text-sm font-medium text-amber-800">
+                    Syncing HubSpot companies...
+                  </p>
+                  <p className="text-xs text-amber-600">
+                    This takes 2-5 minutes the first time. You only need to do this once.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-amber-800">
+                    HubSpot cache is empty
+                  </p>
+                  <p className="text-xs text-amber-600">
+                    Click &quot;Sync HubSpot&quot; to load your CRM companies. This is a one-time setup.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+          <Button
+            onClick={handleSync}
+            disabled={syncing}
+            size="sm"
+            variant={cacheStatus?.cached ? "outline" : "default"}
+          >
+            {syncing ? (
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-1" />
+            )}
+            {syncing ? "Syncing..." : cacheStatus?.cached ? "Re-sync" : "Sync HubSpot"}
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* How to Use + Upload */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Extension Instructions */}

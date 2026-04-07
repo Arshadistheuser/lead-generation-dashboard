@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { matchCompaniesWithHubSpot } from "@/lib/hubspot-matcher";
+import { matchCompaniesLocal } from "@/lib/hubspot-matcher-local";
 import { prisma } from "@/lib/prisma";
 
 function corsHeaders() {
@@ -36,7 +36,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const matched = await matchCompaniesWithHubSpot(companies);
+    // Check if HubSpot cache exists
+    const cacheStatus = await prisma.hubSpotCacheStatus.findUnique({ where: { id: "singleton" } });
+    if (!cacheStatus || cacheStatus.totalCached === 0) {
+      return NextResponse.json(
+        { error: "HubSpot cache is empty. Sync HubSpot data from the Company Matcher page first." },
+        { status: 400, headers: corsHeaders() }
+      );
+    }
+
+    const matched = await matchCompaniesLocal(companies);
 
     const found = matched.filter((m) => m.status === "found").length;
     const notFound = matched.filter((m) => m.status === "not_found").length;

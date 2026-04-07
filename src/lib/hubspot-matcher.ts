@@ -112,7 +112,6 @@ export async function matchCompaniesWithHubSpot(
       }
 
       // Strategy 5 removed — too slow for batch matching
-      }
     } catch (error) {
       console.error(`Error matching ${company.name}:`, error);
     }
